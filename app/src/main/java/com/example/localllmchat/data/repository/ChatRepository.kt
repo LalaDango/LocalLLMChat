@@ -114,7 +114,8 @@ class ChatRepository(
             }
             addMessage(conversationId, "user", dbContent)
 
-            val messages = messageDao.getMessagesForConversationSync(conversationId)
+            val allMessages = messageDao.getMessagesForConversationSync(conversationId)
+            val messages = allMessages.filter { !it.isExcluded }
 
             // Build API messages: all history as text, current message may be multimodal
             // Use summaryText for summarized messages to reduce token consumption
@@ -237,8 +238,8 @@ class ChatRepository(
                 prefillSpeedTps = usage?.prefillSpeedTps
             )
 
-            val firstUserMessage = messages.firstOrNull { it.role == "user" }?.content
-            if (firstUserMessage != null && messages.size <= 2) {
+            val firstUserMessage = allMessages.firstOrNull { it.role == "user" }?.content
+            if (firstUserMessage != null && allMessages.size <= 2) {
                 val title = firstUserMessage.take(30) + if (firstUserMessage.length > 30) "..." else ""
                 updateConversationTitle(conversationId, title)
             }
@@ -247,6 +248,10 @@ class ChatRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun excludeMessage(messageId: Long, isExcluded: Boolean) {
+        messageDao.updateExcluded(messageId, isExcluded)
     }
 
     data class SummarizeResult(

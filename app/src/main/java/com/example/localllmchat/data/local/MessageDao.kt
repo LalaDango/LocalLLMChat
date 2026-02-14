@@ -21,4 +21,7 @@ interface MessageDao {
 
     @Query("UPDATE messages SET summaryText = :summaryText, isSummarized = 1 WHERE id = :messageId")
     suspend fun updateSummary(messageId: Long, summaryText: String)
+
+    @Query("UPDATE messages SET isExcluded = :isExcluded WHERE id = :messageId")
+    suspend fun updateExcluded(messageId: Long, isExcluded: Boolean)
 }

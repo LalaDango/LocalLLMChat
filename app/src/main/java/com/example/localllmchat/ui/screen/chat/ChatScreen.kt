@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Summarize
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.TextButton
@@ -72,6 +73,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
@@ -294,6 +296,9 @@ fun ChatScreen(
                         },
                         onShowOriginal = {
                             showOriginalTextFor = message
+                        },
+                        onExcludeToggle = {
+                            viewModel.toggleExcludeMessage(message.id, message.isExcluded)
                         },
                         modifier = (if (cachedHeight != null) {
                             Modifier.defaultMinSize(minHeight = with(density) { cachedHeight.toDp() })
@@ -555,6 +560,7 @@ private fun MessageBubble(
     onInfoClick: () -> Unit,
     onSummarize: () -> Unit,
     onShowOriginal: () -> Unit,
+    onExcludeToggle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isUser = message.role == "user"
@@ -576,7 +582,9 @@ private fun MessageBubble(
     }
 
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .alpha(if (message.isExcluded) 0.45f else 1f),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
         Box(
@@ -645,6 +653,21 @@ private fun MessageBubble(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(
+                        onClick = onExcludeToggle,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.VisibilityOff,
+                            contentDescription = if (message.isExcluded) "Include in context" else "Exclude from context",
+                            modifier = Modifier.size(18.dp),
+                            tint = if (message.isExcluded) {
+                                MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                            } else {
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            }
+                        )
+                    }
                     if (message.isSummarized) {
                         // Show "Show Original" button for summarized messages
                         IconButton(

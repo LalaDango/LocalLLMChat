@@ -30,5 +30,6 @@ data class MessageEntity(
     val decodingSpeedTps: Double? = null,
     val prefillSpeedTps: Double? = null,
     val summaryText: String? = null,
-    val isSummarized: Boolean = false
+    val isSummarized: Boolean = false,
+    val isExcluded: Boolean = false
 )

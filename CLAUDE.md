@@ -96,11 +96,11 @@ app/src/main/java/com/example/localllmchat/
 
 | ファイル | 役割 | 備考 |
 |---------|------|------|
-| `AppDatabase.kt` | Room DB 定義 (version 3)。Migration 1→2（トークン追跡）、2→3（要約機能） | シングルトン |
+| `AppDatabase.kt` | Room DB 定義 (version 4)。Migration 1→2（トークン追跡）、2→3（要約機能）、3→4（メッセージ除外） | シングルトン |
 | `ConversationEntity.kt` | 会話テーブル: id, title, createdAt, updatedAt | |
 | `ConversationDao.kt` | 会話 CRUD。`getAllConversations()` は Flow（updatedAt DESC） | |
-| `MessageEntity.kt` | メッセージテーブル: content, role, tokens, speeds, summaryText, isSummarized | conversationId で索引 |
-| `MessageDao.kt` | メッセージ CRUD + `updateSummary()` | |
+| `MessageEntity.kt` | メッセージテーブル: content, role, tokens, speeds, summaryText, isSummarized, isExcluded | conversationId で索引 |
+| `MessageDao.kt` | メッセージ CRUD + `updateSummary()` + `updateExcluded()` | |
 
 ### データ層 — リモート API (Retrofit)
 
@@ -163,7 +163,7 @@ ChatViewModel.sendMessage()
     ↓
 ChatRepository.sendMessage()
     ├→ MessageDao.insert()          ... ユーザーメッセージ保存
-    ├→ MessageDao.getMessages...()  ... 履歴取得（要約済みなら summaryText を使用）
+    ├→ MessageDao.getMessages...()  ... 履歴取得（isExcluded を除外 → 要約済みなら summaryText を使用）
     ├→ SettingsRepository           ... baseUrl, modelName, systemPrompt 取得
     ├→ ApiClient → ChatApi          ... SSE ストリーミングリクエスト
     │     ↓ (BufferedReader, 32ms throttle)
@@ -230,15 +230,23 @@ ChatRepository.summarizeMessage()
 - ストリーミング中の不完全タグは `cleanupIncompleteThinkTags()` で修正
 - 要約レスポンスからも `<think>` タグを除去（モデル非依存）
 
+### メッセージ除外機能
+- 個別メッセージをAPI送信履歴から除外するトグル機能（コンテキストウィンドウ節約）
+- 除外されたメッセージは `ChatRepository.sendMessage()` の履歴構築時にフィルタ（要約チェックの前段階）
+- 除外中のバブルは `alpha(0.45f)` で半透明表示、`VisibilityOff` アイコンが `error` 色に変化
+- `SessionTokenCounter` は除外メッセージのトークンを集計から除外
+- 要約機能と独立（要約済みメッセージもさらに除外可能）
+
 ### 要約機能
 - タイムアウト 180 秒（小型モデルの Prefill で 10 秒以上かかる場合がある）
 - トークン計算: `originalTokens = promptTokens - 50`（system prompt 固定オフセット）
 - 履歴構築時: `isSummarized == true` なら `summaryText` を API に送信
 
 ### DB マイグレーション
-- 現在 version 3。新しいカラム追加時は `AppDatabase.kt` に Migration を追加すること
+- 現在 version 4。新しいカラム追加時は `AppDatabase.kt` に Migration を追加すること
 - Migration 1→2: トークン追跡カラム (promptTokens, completionTokens, totalTokens, speeds)
 - Migration 2→3: 要約カラム (summaryText, isSummarized)
+- Migration 3→4: メッセージ除外カラム (isExcluded)
 
 ### DI
 - Hilt/Dagger 不使用。`LocalLLMChatApp` で手動シングルトン生成

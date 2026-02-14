@@ -70,10 +70,11 @@ class ChatViewModel(
     }
 
     private fun updateSessionTokenCount(messages: List<MessageEntity>) {
-        val lastAssistantMessage = messages.lastOrNull { it.role == "assistant" }
+        val activeMessages = messages.filter { !it.isExcluded }
+        val lastAssistantMessage = activeMessages.lastOrNull { it.role == "assistant" }
         val lastTurnTokens = lastAssistantMessage?.totalTokens ?: 0
-        // Sum total_tokens from all assistant messages for cumulative count
-        val cumulativeTokens = messages.filter { it.role == "assistant" }.sumOf { it.totalTokens ?: 0 }
+        // Sum total_tokens from all non-excluded assistant messages for cumulative count
+        val cumulativeTokens = activeMessages.filter { it.role == "assistant" }.sumOf { it.totalTokens ?: 0 }
         _uiState.value = _uiState.value.copy(
             sessionTokenCount = lastTurnTokens,
             conversationTotalTokens = cumulativeTokens
@@ -168,6 +169,12 @@ class ChatViewModel(
                     )
                 }
             )
+        }
+    }
+
+    fun toggleExcludeMessage(messageId: Long, currentlyExcluded: Boolean) {
+        viewModelScope.launch {
+            chatRepository.excludeMessage(messageId, !currentlyExcluded)
         }
     }
 
