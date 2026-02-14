@@ -1,0 +1,27 @@
+# Built outputs
+/build/
+/app/build/
+
+# Gradle
+/.gradle/
+/gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+/.idea/
+*.iml
+
+# Local config
+local.properties
+
+# APK/AAB
+*.apk
+*.aab
+
+# Claude Code session data
+/.claude/
+
+# Kotlin compiler logs
+/.kotlin/
+
+# Windows reserved device name (empty file artifact)
+nul
