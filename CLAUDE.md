@@ -3,11 +3,6 @@
 ## プロジェクト概要
 Kotlin / Jetpack Compose の Android チャットアプリ。端末の NPU 上で動作する FastFlowLM（OpenAI 互換 API）と SSE ストリーミング通信し、ローカル LLM とリアルタイムに会話できる。
 
-- Markwon による Markdown レンダリング（native TextView + AndroidView）
-- Room DB でメッセージ・会話を永続化、DataStore で設定保存
-- マルチモーダル対応（画像添付 → Base64 → ImageUrlPart）
-- メッセージ単位の要約機能（コンテキストウィンドウ節約）
-
 ## ビルド・実行手順
 
 1. Android Studio で開く
@@ -38,9 +33,7 @@ Kotlin / Jetpack Compose の Android チャットアプリ。端末の NPU 上�
 - 要約レスポンスからも `<think>` タグを除去（モデル非依存）
 
 ### メッセージ除外機能
-- 個別メッセージをAPI送信履歴から除外するトグル機能（コンテキストウィンドウ節約）
-- 除外されたメッセージは `ChatRepository.sendMessage()` の履歴構築時にフィルタ（要約チェックの前段階）
-- 除外中のバブルは `alpha(0.45f)` で半透明表示、`VisibilityOff` アイコンが `error` 色に変化
+- `ChatRepository.sendMessage()` の履歴構築時に `isExcluded` でフィルタ（要約チェックの前段階）
 - `SessionTokenCounter` は除外メッセージのトークンを集計から除外
 - 要約機能と独立（要約済みメッセージもさらに除外可能）
 
@@ -51,9 +44,6 @@ Kotlin / Jetpack Compose の Android チャットアプリ。端末の NPU 上�
 
 ### DB マイグレーション
 - 現在 version 4。新しいカラム追加時は `AppDatabase.kt` に Migration を追加すること
-- Migration 1→2: トークン追跡カラム (promptTokens, completionTokens, totalTokens, speeds)
-- Migration 2→3: 要約カラム (summaryText, isSummarized)
-- Migration 3→4: メッセージ除外カラム (isExcluded)
 
 ### DI
 - Hilt/Dagger 不使用。`LocalLLMChatApp` で手動シングルトン生成
