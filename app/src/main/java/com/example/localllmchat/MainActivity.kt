@@ -21,7 +21,8 @@ class MainActivity : ComponentActivity() {
                 NavGraph(
                     navController = navController,
                     chatRepository = app.chatRepository,
-                    settingsRepository = app.settingsRepository
+                    settingsRepository = app.settingsRepository,
+                    leapModelManager = app.leapModelManager
                 )
             }
         }

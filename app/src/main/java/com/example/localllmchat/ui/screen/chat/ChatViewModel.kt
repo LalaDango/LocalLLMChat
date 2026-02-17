@@ -3,11 +3,14 @@ package com.example.localllmchat.ui.screen.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import android.util.Base64
+import com.example.localllmchat.data.leap.LeapModelManager
 import com.example.localllmchat.data.local.ConversationEntity
 import com.example.localllmchat.data.local.MessageEntity
 import com.example.localllmchat.data.repository.ChatRepository
 import com.example.localllmchat.data.repository.SettingsRepository
 import com.example.localllmchat.util.ProcessedAttachment
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,13 +30,15 @@ data class ChatUiState(
     val streamingContent: String = "",
     val streamingReasoning: String = "",
     val summarizingMessageId: Long? = null,
-    val summarizeToast: String? = null
+    val summarizeToast: String? = null,
+    val leapVisionStatus: String? = null // "画像を読み取り中..." etc.
 )
 
 class ChatViewModel(
     private val conversationId: Long,
     private val chatRepository: ChatRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val leapModelManager: LeapModelManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -112,10 +117,36 @@ class ChatViewModel(
         )
 
         viewModelScope.launch {
+            // Check if LEAP Vision should process the image first
+            var leapImageDescription: String? = null
+            if (attachment is ProcessedAttachment.ImageAttachment) {
+                val leapEnabled = settingsRepository.leapVisionEnabled.first()
+                if (leapEnabled && leapModelManager.isReady()) {
+                    _uiState.value = _uiState.value.copy(leapVisionStatus = "画像を読み取り中...")
+                    val jpegBytes = Base64.decode(attachment.base64Data, Base64.NO_WRAP)
+                    val prompt = if (message.isNotBlank()) message else "この画像の内容を詳しく説明してください。テキストがあれば書き起こしてください。"
+                    val result = leapModelManager.describeImage(jpegBytes, prompt)
+                    result.fold(
+                        onSuccess = { description ->
+                            leapImageDescription = description
+                            _uiState.value = _uiState.value.copy(leapVisionStatus = null)
+                        },
+                        onFailure = { e ->
+                            // LEAP failed, fall back to direct multimodal
+                            _uiState.value = _uiState.value.copy(
+                                leapVisionStatus = null,
+                                error = "LEAP Vision失敗 (フォールバック): ${e.message}"
+                            )
+                        }
+                    )
+                }
+            }
+
             val result = chatRepository.sendMessage(
                 conversationId = conversationId,
                 userMessage = message,
                 attachment = attachment,
+                leapImageDescription = leapImageDescription,
                 onStreamUpdate = { content, reasoning ->
                     _uiState.value = _uiState.value.copy(
                         streamingContent = content,
@@ -189,11 +220,12 @@ class ChatViewModel(
     class Factory(
         private val conversationId: Long,
         private val chatRepository: ChatRepository,
-        private val settingsRepository: SettingsRepository
+        private val settingsRepository: SettingsRepository,
+        private val leapModelManager: LeapModelManager
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return ChatViewModel(conversationId, chatRepository, settingsRepository) as T
+            return ChatViewModel(conversationId, chatRepository, settingsRepository, leapModelManager) as T
         }
     }
 }

@@ -1,26 +1,32 @@
 package com.example.localllmchat.ui.screen.settings
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -29,10 +35,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.localllmchat.data.leap.LeapModelManager
+import com.example.localllmchat.data.leap.LeapModelState
 import com.example.localllmchat.data.repository.SettingsRepository
 
 private val PRESET_MODELS = listOf(
@@ -49,9 +58,10 @@ private val PRESET_MODELS = listOf(
 @Composable
 fun SettingsScreen(
     settingsRepository: SettingsRepository,
+    leapModelManager: LeapModelManager,
     onBack: () -> Unit,
     viewModel: SettingsViewModel = viewModel(
-        factory = SettingsViewModel.Factory(settingsRepository)
+        factory = SettingsViewModel.Factory(settingsRepository, leapModelManager)
     )
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -177,6 +187,115 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // LEAP Vision Section
+            Text(
+                text = "LEAP Vision (On-Device)",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "画像をデバイス上のVLモデルで読み取り、テキスト化してからメインモデルに渡します。マルチモーダル非対応モデルでも画像の内容を理解できるようになります。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "LEAP Vision を有効にする",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = uiState.leapVisionEnabled,
+                    onCheckedChange = { viewModel.toggleLeapVision(it) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Model state display
+            when (val state = uiState.leapModelState) {
+                is LeapModelState.NotLoaded -> {
+                    Text(
+                        text = "モデル: 未ロード",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    if (uiState.leapVisionEnabled) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = { viewModel.loadLeapModel() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("モデルをダウンロード & ロード")
+                        }
+                    }
+                }
+                is LeapModelState.Downloading -> {
+                    Text(
+                        text = "ダウンロード中: ${(state.progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { state.progress },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                is LeapModelState.Loading -> {
+                    Text(
+                        text = "モデルをロード中...",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                is LeapModelState.Ready -> {
+                    Text(
+                        text = "モデル: LFM2.5-VL-1.6B (Ready)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { viewModel.unloadLeapModel() },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("モデルをアンロード")
+                    }
+                }
+                is LeapModelState.Error -> {
+                    Text(
+                        text = "エラー: ${state.message}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { viewModel.loadLeapModel() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("再試行")
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

@@ -100,9 +100,10 @@ fun ChatScreen(
     conversationId: Long,
     chatRepository: ChatRepository,
     settingsRepository: SettingsRepository,
+    leapModelManager: com.example.localllmchat.data.leap.LeapModelManager,
     onBack: () -> Unit,
     viewModel: ChatViewModel = viewModel(
-        factory = ChatViewModel.Factory(conversationId, chatRepository, settingsRepository)
+        factory = ChatViewModel.Factory(conversationId, chatRepository, settingsRepository, leapModelManager)
     )
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -315,7 +316,26 @@ fun ChatScreen(
 
                 if (uiState.isLoading) {
                     item(key = "streaming") {
-                        if (uiState.streamingContent.isNotEmpty() || uiState.streamingReasoning.isNotEmpty()) {
+                        if (uiState.leapVisionStatus != null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = uiState.leapVisionStatus!!,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        } else if (uiState.streamingContent.isNotEmpty() || uiState.streamingReasoning.isNotEmpty()) {
                             val displayContent = buildString {
                                 if (uiState.streamingReasoning.isNotEmpty()) {
                                     append("<think>")

@@ -98,6 +98,7 @@ class ChatRepository(
         conversationId: Long,
         userMessage: String,
         attachment: ProcessedAttachment? = null,
+        leapImageDescription: String? = null,
         onStreamUpdate: ((content: String, reasoning: String) -> Unit)? = null
     ): Result<String> {
         return try {
@@ -119,6 +120,7 @@ class ChatRepository(
 
             // Build API messages: all history as text, current message may be multimodal
             // Use summaryText for summarized messages to reduce token consumption
+            val useLeapVision = leapImageDescription != null && attachment is ProcessedAttachment.ImageAttachment
             val apiMessages = messages.mapIndexed { index, msg ->
                 val isLastMessage = index == messages.lastIndex
                 if (msg.role == "assistant") {
@@ -128,6 +130,17 @@ class ChatRepository(
                         .replace(Regex("^[\\s\\S]*?</think>"), "")
                         .trim()
                     ApiChatMessage(role = msg.role, content = MessageContent.Text(content))
+                } else if (isLastMessage && attachment is ProcessedAttachment.ImageAttachment && useLeapVision) {
+                    // LEAP Vision: send image description as text instead of multimodal
+                    val textWithDescription = buildString {
+                        append("[添付画像の説明]\n")
+                        append(leapImageDescription)
+                        append("\n\n")
+                        if (userMessage.isNotBlank()) {
+                            append(userMessage)
+                        }
+                    }
+                    ApiChatMessage(role = msg.role, content = MessageContent.Text(textWithDescription))
                 } else if (isLastMessage && attachment is ProcessedAttachment.ImageAttachment) {
                     // Current user message with image: use multimodal format
                     val parts = mutableListOf<ContentPart>()

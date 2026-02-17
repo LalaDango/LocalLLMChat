@@ -6,6 +6,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.example.localllmchat.data.leap.LeapModelManager
 import com.example.localllmchat.data.repository.ChatRepository
 import com.example.localllmchat.data.repository.SettingsRepository
 import com.example.localllmchat.ui.screen.chat.ChatScreen
@@ -24,7 +25,8 @@ sealed class Screen(val route: String) {
 fun NavGraph(
     navController: NavHostController,
     chatRepository: ChatRepository,
-    settingsRepository: SettingsRepository
+    settingsRepository: SettingsRepository,
+    leapModelManager: LeapModelManager
 ) {
     NavHost(
         navController = navController,
@@ -56,6 +58,7 @@ fun NavGraph(
                 conversationId = conversationId,
                 chatRepository = chatRepository,
                 settingsRepository = settingsRepository,
+                leapModelManager = leapModelManager,
                 onBack = { navController.popBackStack() }
             )
         }
@@ -63,6 +66,7 @@ fun NavGraph(
         composable(Screen.Settings.route) {
             SettingsScreen(
                 settingsRepository = settingsRepository,
+                leapModelManager = leapModelManager,
                 onBack = { navController.popBackStack() }
             )
         }

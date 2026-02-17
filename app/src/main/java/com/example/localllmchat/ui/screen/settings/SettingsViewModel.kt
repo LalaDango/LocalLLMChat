@@ -3,6 +3,8 @@ package com.example.localllmchat.ui.screen.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.localllmchat.data.leap.LeapModelManager
+import com.example.localllmchat.data.leap.LeapModelState
 import com.example.localllmchat.data.repository.SettingsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,12 +16,15 @@ data class SettingsUiState(
     val modelName: String = SettingsRepository.DEFAULT_MODEL_NAME,
     val contextWindowSize: Int = SettingsRepository.DEFAULT_CONTEXT_WINDOW_SIZE,
     val systemPrompt: String = SettingsRepository.DEFAULT_SYSTEM_PROMPT,
+    val leapVisionEnabled: Boolean = SettingsRepository.DEFAULT_LEAP_VISION_ENABLED,
+    val leapModelState: LeapModelState = LeapModelState.NotLoaded,
     val isSaving: Boolean = false,
     val saveSuccess: Boolean = false
 )
 
 class SettingsViewModel(
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    val leapModelManager: LeapModelManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -50,6 +55,16 @@ class SettingsViewModel(
                 _uiState.value = _uiState.value.copy(systemPrompt = prompt)
             }
         }
+        viewModelScope.launch {
+            settingsRepository.leapVisionEnabled.collect { enabled ->
+                _uiState.value = _uiState.value.copy(leapVisionEnabled = enabled)
+            }
+        }
+        viewModelScope.launch {
+            leapModelManager.modelState.collect { state ->
+                _uiState.value = _uiState.value.copy(leapModelState = state)
+            }
+        }
     }
 
     fun updateBaseUrl(url: String) {
@@ -69,6 +84,30 @@ class SettingsViewModel(
         _uiState.value = _uiState.value.copy(systemPrompt = prompt, saveSuccess = false)
     }
 
+    fun toggleLeapVision(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(leapVisionEnabled = enabled, saveSuccess = false)
+        viewModelScope.launch {
+            settingsRepository.saveLeapVisionEnabled(enabled)
+            if (enabled) {
+                leapModelManager.loadModel()
+            } else {
+                leapModelManager.unloadModel()
+            }
+        }
+    }
+
+    fun loadLeapModel() {
+        viewModelScope.launch {
+            leapModelManager.loadModel()
+        }
+    }
+
+    fun unloadLeapModel() {
+        viewModelScope.launch {
+            leapModelManager.unloadModel()
+        }
+    }
+
     fun saveSettings() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSaving = true)
@@ -82,10 +121,13 @@ class SettingsViewModel(
         }
     }
 
-    class Factory(private val settingsRepository: SettingsRepository) : ViewModelProvider.Factory {
+    class Factory(
+        private val settingsRepository: SettingsRepository,
+        private val leapModelManager: LeapModelManager
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return SettingsViewModel(settingsRepository) as T
+            return SettingsViewModel(settingsRepository, leapModelManager) as T
         }
     }
 }

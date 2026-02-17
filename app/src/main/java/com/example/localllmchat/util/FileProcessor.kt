@@ -84,14 +84,12 @@ object FileProcessor {
         }
 
         val outputStream = ByteArrayOutputStream()
-        val compressFormat = if (mimeType == "image/png")
-            Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
-        bitmap.compress(compressFormat, 85, outputStream)
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
 
         if (bitmap !== originalBitmap) bitmap.recycle()
         originalBitmap.recycle()
 
         val base64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
-        return ProcessedAttachment.ImageAttachment(fileName, mimeType, base64, wasResized)
+        return ProcessedAttachment.ImageAttachment(fileName, "image/jpeg", base64, wasResized)
     }
 }
