@@ -305,6 +305,57 @@ class ChatRepository(
         }
     }
 
+    suspend fun translateMessage(messageId: Long, content: String): Result<String> {
+        return try {
+            val baseUrl = settingsRepository.baseUrl.first()
+            val api = ApiClient.getChatApi(baseUrl)
+
+            // Strip <think>...</think> tags from content before translating
+            val cleanedContent = content
+                .replace(Regex("<think>[\\s\\S]*?</think>"), "")
+                .replace(Regex("^[\\s\\S]*?</think>"), "")
+                .trim()
+
+            val translationPrompt = buildString {
+                append("You are a professional English (en) to Japanese (ja) translator. ")
+                append("Your goal is to accurately convey the meaning and nuances of the original English text ")
+                append("while adhering to Japanese grammar, vocabulary, and cultural sensitivities.\n")
+                append("Produce only the Japanese translation, without any additional explanations or commentary. ")
+                append("Please translate the following English text into Japanese:\n")
+                append("\n")
+                append("\n")
+                append(cleanedContent)
+            }
+
+            val request = ChatRequest(
+                model = "translategemma:4b",
+                messages = listOf(
+                    ChatMessage(role = "user", content = translationPrompt)
+                ),
+                stream = false,
+                temperature = 0.1,
+                maxTokens = 8192
+            )
+
+            val response = withTimeout(180_000) {
+                withContext(Dispatchers.IO) {
+                    api.chat(request = request)
+                }
+            }
+
+            val translatedText = response.choices.firstOrNull()?.message?.content?.trim() ?: ""
+
+            if (translatedText.isBlank()) {
+                return Result.failure(Exception("翻訳結果が空です"))
+            }
+
+            messageDao.updateTranslation(messageId, translatedText)
+            Result.success(translatedText)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     private fun cleanupIncompleteThinkTags(text: String): String {
         var result = text
         // If </think> exists but no <think>, prepend <think> for proper parsing

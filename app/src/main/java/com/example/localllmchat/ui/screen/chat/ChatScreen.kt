@@ -42,6 +42,8 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Summarize
+import androidx.compose.material.icons.outlined.Translate
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -285,6 +287,7 @@ fun ChatScreen(
                     MessageBubble(
                         message = message,
                         isSummarizing = uiState.summarizingMessageId == message.id,
+                        isTranslating = uiState.translatingMessageId == message.id,
                         onCopyMessage = { content ->
                             copyToClipboard(context, content)
                         },
@@ -299,6 +302,9 @@ fun ChatScreen(
                         },
                         onExcludeToggle = {
                             viewModel.toggleExcludeMessage(message.id, message.isExcluded)
+                        },
+                        onTranslate = {
+                            viewModel.translateMessage(message.id, message.content)
                         },
                         modifier = (if (cachedHeight != null) {
                             Modifier.defaultMinSize(minHeight = with(density) { cachedHeight.toDp() })
@@ -556,11 +562,13 @@ private fun SelectableText(
 private fun MessageBubble(
     message: MessageEntity,
     isSummarizing: Boolean,
+    isTranslating: Boolean,
     onCopyMessage: (String) -> Unit,
     onInfoClick: () -> Unit,
     onSummarize: () -> Unit,
     onShowOriginal: () -> Unit,
     onExcludeToggle: () -> Unit,
+    onTranslate: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isUser = message.role == "user"
@@ -648,11 +656,50 @@ private fun MessageBubble(
                     }
                 }
 
+                // Inline translation display
+                if (message.translatedText != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "\u2500\u2500 \u7ffb\u8a33 \u2500\u2500",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    SelectableText(
+                        text = message.translatedText,
+                        textColor = textColor,
+                        textSizeSp = 14f
+                    )
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Translate button
+                    if (message.translatedText == null) {
+                        if (isTranslating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            IconButton(
+                                onClick = onTranslate,
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Translate,
+                                    contentDescription = "Translate to Japanese",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
+                    }
                     IconButton(
                         onClick = onExcludeToggle,
                         modifier = Modifier.size(32.dp)

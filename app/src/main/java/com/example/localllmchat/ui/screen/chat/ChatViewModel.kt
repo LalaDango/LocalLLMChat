@@ -27,7 +27,8 @@ data class ChatUiState(
     val streamingContent: String = "",
     val streamingReasoning: String = "",
     val summarizingMessageId: Long? = null,
-    val summarizeToast: String? = null
+    val summarizeToast: String? = null,
+    val translatingMessageId: Long? = null
 )
 
 class ChatViewModel(
@@ -166,6 +167,25 @@ class ChatViewModel(
                     _uiState.value = _uiState.value.copy(
                         summarizingMessageId = null,
                         error = "要約に失敗しました: ${e.message}"
+                    )
+                }
+            )
+        }
+    }
+
+    fun translateMessage(messageId: Long, content: String) {
+        if (_uiState.value.translatingMessageId != null) return
+        _uiState.value = _uiState.value.copy(translatingMessageId = messageId)
+        viewModelScope.launch {
+            val result = chatRepository.translateMessage(messageId, content)
+            result.fold(
+                onSuccess = {
+                    _uiState.value = _uiState.value.copy(translatingMessageId = null)
+                },
+                onFailure = { e ->
+                    _uiState.value = _uiState.value.copy(
+                        translatingMessageId = null,
+                        error = "翻訳に失敗しました: ${e.message}"
                     )
                 }
             )
