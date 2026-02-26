@@ -28,7 +28,12 @@ data class ChatUiState(
     val streamingReasoning: String = "",
     val summarizingMessageId: Long? = null,
     val summarizeToast: String? = null,
-    val translatingMessageId: Long? = null
+    val translatingMessageId: Long? = null,
+    val toolExecutionStatus: String? = null,
+    val availableTools: List<String> = emptyList(),
+    val toolDescriptions: Map<String, String> = emptyMap(),
+    val disabledTools: Set<String> = emptySet(),
+    val modelSupportsTools: Boolean = false
 )
 
 class ChatViewModel(
@@ -44,6 +49,7 @@ class ChatViewModel(
         loadConversation()
         loadMessages()
         loadContextWindowSize()
+        loadToolState()
     }
 
     private fun loadConversation() {
@@ -67,6 +73,35 @@ class ChatViewModel(
             settingsRepository.contextWindowSize.collect { size ->
                 _uiState.value = _uiState.value.copy(contextWindowSize = size)
             }
+        }
+    }
+
+    private fun loadToolState() {
+        val availableTools = chatRepository.getAvailableToolNames()
+        val toolDescriptions = chatRepository.getToolDescriptions()
+        _uiState.value = _uiState.value.copy(
+            availableTools = availableTools,
+            toolDescriptions = toolDescriptions
+        )
+        viewModelScope.launch {
+            settingsRepository.disabledTools.collect { disabled ->
+                _uiState.value = _uiState.value.copy(disabledTools = disabled)
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.modelName.collect { modelName ->
+                _uiState.value = _uiState.value.copy(
+                    modelSupportsTools = chatRepository.supportsToolCalling(modelName)
+                )
+            }
+        }
+    }
+
+    fun toggleTool(name: String) {
+        viewModelScope.launch {
+            val current = _uiState.value.disabledTools
+            val updated = if (name in current) current - name else current + name
+            settingsRepository.saveDisabledTools(updated)
         }
     }
 
@@ -122,6 +157,15 @@ class ChatViewModel(
                         streamingContent = content,
                         streamingReasoning = reasoning
                     )
+                },
+                onToolStatus = { status ->
+                    _uiState.value = _uiState.value.copy(
+                        toolExecutionStatus = status,
+                        // Clear streaming content: Step 1 messages are now saved to DB
+                        // and will appear via Flow; Step 3 will fill new streaming content
+                        streamingContent = "",
+                        streamingReasoning = ""
+                    )
                 }
             )
             result.fold(
@@ -130,7 +174,8 @@ class ChatViewModel(
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         streamingContent = "",
-                        streamingReasoning = ""
+                        streamingReasoning = "",
+                        toolExecutionStatus = null
                     )
                 },
                 onFailure = { e ->
@@ -138,6 +183,7 @@ class ChatViewModel(
                         isLoading = false,
                         streamingContent = "",
                         streamingReasoning = "",
+                        toolExecutionStatus = null,
                         error = e.message ?: "An error occurred"
                     )
                 }
@@ -195,6 +241,14 @@ class ChatViewModel(
     fun toggleExcludeMessage(messageId: Long, currentlyExcluded: Boolean) {
         viewModelScope.launch {
             chatRepository.excludeMessage(messageId, !currentlyExcluded)
+        }
+    }
+
+    fun toggleExcludeToolGroup(messageIds: List<Long>, currentlyExcluded: Boolean) {
+        viewModelScope.launch {
+            messageIds.forEach { id ->
+                chatRepository.excludeMessage(id, !currentlyExcluded)
+            }
         }
     }
 

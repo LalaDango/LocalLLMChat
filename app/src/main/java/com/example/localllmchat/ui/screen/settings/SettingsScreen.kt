@@ -40,6 +40,7 @@ private val PRESET_MODELS = listOf(
     "lfm2.5-it:1.2b",
     "lfm2.5-tk:1.2b",
     "qwen2.5vl-it:3b",
+    "qwen3-it:4b",
     "qwen3-tk:4b",
     "qwen3vl-it:4b",
     "qwen3:8b",

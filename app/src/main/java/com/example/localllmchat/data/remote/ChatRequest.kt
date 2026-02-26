@@ -31,5 +31,9 @@ data class ChatMessage(
     @SerializedName("content")
     val content: String? = null,
     @SerializedName("reasoning_content")
-    val reasoningContent: String? = null
+    val reasoningContent: String? = null,
+    @SerializedName("tool_calls")
+    val toolCalls: List<ToolCall>? = null,
+    @SerializedName("tool_call_id")
+    val toolCallId: String? = null
 )

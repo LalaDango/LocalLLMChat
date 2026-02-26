@@ -7,8 +7,10 @@ import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -38,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Info
@@ -46,7 +49,10 @@ import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -84,7 +90,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.localllmchat.data.local.MessageEntity
+import com.example.localllmchat.data.remote.ToolCall
 import com.example.localllmchat.data.repository.ChatRepository
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.example.localllmchat.data.repository.SettingsRepository
 import com.example.localllmchat.ui.theme.AssistantMessageBg
 import com.example.localllmchat.ui.theme.ThinkBlockBg
@@ -284,6 +293,35 @@ fun ChatScreen(
                     val density = LocalDensity.current
                     val cachedHeight = messageHeightCache[message.id]
 
+                    // Tool-related messages: show collapsible tool call bubble
+                    if (message.role == "assistant" && message.toolCallsJson != null) {
+                        // Show Step 1 reasoning as a regular bubble above tool call info
+                        val hasReasoning = message.content.contains("<think>")
+                        if (hasReasoning) {
+                            MessageBubble(
+                                message = message,
+                                isSummarizing = false,
+                                isTranslating = false,
+                                onCopyMessage = { content -> copyToClipboard(context, content) },
+                                onInfoClick = { selectedMessageForInfo = message },
+                                onSummarize = {},
+                                onShowOriginal = {},
+                                onExcludeToggle = {},
+                                onTranslate = {}
+                            )
+                        }
+                        ToolCallBubble(
+                            message = message,
+                            allMessages = uiState.messages,
+                            onExcludeToggle = viewModel::toggleExcludeToolGroup
+                        )
+                    } else if (message.role == "tool") {
+                        ToolCallBubble(
+                            message = message,
+                            allMessages = uiState.messages,
+                            onExcludeToggle = viewModel::toggleExcludeToolGroup
+                        )
+                    } else {
                     MessageBubble(
                         message = message,
                         isSummarizing = uiState.summarizingMessageId == message.id,
@@ -317,9 +355,18 @@ fun ChatScreen(
                             }
                         }
                     )
+                    }
                 }
 
                 if (uiState.isLoading) {
+                    // Tool execution indicator (separate item, shown above streaming)
+                    val toolStatus = uiState.toolExecutionStatus
+                    if (toolStatus != null) {
+                        item(key = "tool_status") {
+                            ToolExecutionIndicator(status = toolStatus)
+                        }
+                    }
+
                     item(key = "streaming") {
                         if (uiState.streamingContent.isNotEmpty() || uiState.streamingReasoning.isNotEmpty()) {
                             val displayContent = buildString {
@@ -331,7 +378,8 @@ fun ChatScreen(
                                 append(uiState.streamingContent)
                             }
                             StreamingMessageBubble(content = displayContent)
-                        } else {
+                        } else if (toolStatus == null) {
+                            // Loading spinner only when not in tool execution phase
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -366,6 +414,11 @@ fun ChatScreen(
                 isLoading = uiState.isLoading,
                 attachment = uiState.attachment,
                 onRemoveAttachment = viewModel::clearAttachment,
+                availableTools = uiState.availableTools,
+                toolDescriptions = uiState.toolDescriptions,
+                disabledTools = uiState.disabledTools,
+                modelSupportsTools = uiState.modelSupportsTools,
+                onToggleTool = viewModel::toggleTool,
                 modifier = Modifier.padding(16.dp)
             )
         }
@@ -835,9 +888,18 @@ private fun ChatInput(
     isLoading: Boolean,
     attachment: ProcessedAttachment?,
     onRemoveAttachment: () -> Unit,
+    availableTools: List<String> = emptyList(),
+    toolDescriptions: Map<String, String> = emptyMap(),
+    disabledTools: Set<String> = emptySet(),
+    modelSupportsTools: Boolean = false,
+    onToggleTool: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val canSend = (text.isNotBlank() || attachment != null) && !isLoading
+    var showToolMenu by remember { mutableStateOf(false) }
+    val showToolButton = modelSupportsTools && availableTools.isNotEmpty()
+    val allToolsEnabled = availableTools.none { it in disabledTools }
+    val someToolsEnabled = availableTools.any { it !in disabledTools }
 
     Column(
         modifier = modifier
@@ -870,6 +932,43 @@ private fun ChatInput(
                 )
             }
 
+            if (showToolButton) {
+                Box {
+                    IconButton(
+                        onClick = { showToolMenu = true },
+                        enabled = !isLoading
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Build,
+                            contentDescription = "Tools",
+                            tint = if (!isLoading && someToolsEnabled)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showToolMenu,
+                        onDismissRequest = { showToolMenu = false }
+                    ) {
+                        availableTools.forEach { toolName ->
+                            val enabled = toolName !in disabledTools
+                            val description = toolDescriptions[toolName] ?: toolName
+                            DropdownMenuItem(
+                                text = { Text(description) },
+                                onClick = { onToggleTool(toolName) },
+                                leadingIcon = {
+                                    Checkbox(
+                                        checked = enabled,
+                                        onCheckedChange = { onToggleTool(toolName) }
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
             OutlinedTextField(
                 value = text,
                 onValueChange = onTextChange,
@@ -894,4 +993,171 @@ private fun ChatInput(
             }
         }
     }
+}
+
+@Composable
+private fun ToolExecutionIndicator(status: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .background(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(12.dp)
+                )
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolCallBubble(
+    message: MessageEntity,
+    allMessages: List<MessageEntity>,
+    onExcludeToggle: (messageIds: List<Long>, currentlyExcluded: Boolean) -> Unit = { _, _ -> }
+) {
+    // For assistant messages with toolCallsJson: show tool call info
+    // For tool messages: show tool result
+    // Both are collapsible
+    var expanded by remember { mutableStateOf(false) }
+
+    if (message.role == "assistant" && message.toolCallsJson != null) {
+        // Parse tool calls to get tool names
+        val toolNames = remember(message.toolCallsJson) {
+            try {
+                val toolCalls: List<ToolCall> = Gson().fromJson(
+                    message.toolCallsJson,
+                    object : TypeToken<List<ToolCall>>() {}.type
+                )
+                toolCalls.mapNotNull { it.function?.name }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        val summary = toolNames.joinToString(", ") { it }
+
+        // Find corresponding tool result messages
+        val toolResults = remember(message.id, allMessages) {
+            val msgIndex = allMessages.indexOfFirst { it.id == message.id }
+            if (msgIndex < 0) emptyList()
+            else allMessages.drop(msgIndex + 1).takeWhile { it.role == "tool" }
+        }
+
+        // Collect all related message IDs for group exclude
+        val groupIds = remember(message.id, toolResults) {
+            listOf(message.id) + toolResults.map { it.id }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp)
+                .alpha(if (message.isExcluded) 0.45f else 1f),
+            horizontalArrangement = Arrangement.Start
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 340.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .clickable { expanded = !expanded }
+                    .padding(10.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = if (expanded) "▼" else "▶",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Text(
+                        text = "$summary を実行",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = Icons.Outlined.VisibilityOff,
+                        contentDescription = "Exclude tool messages",
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { onExcludeToggle(groupIds, message.isExcluded) },
+                        tint = if (message.isExcluded)
+                            MaterialTheme.colorScheme.error
+                        else
+                            MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f)
+                    )
+                }
+
+                AnimatedVisibility(visible = expanded) {
+                    Column(
+                        modifier = Modifier.padding(top = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        // Show tool call details
+                        val toolCalls: List<ToolCall> = remember(message.toolCallsJson) {
+                            try {
+                                Gson().fromJson(
+                                    message.toolCallsJson,
+                                    object : TypeToken<List<ToolCall>>() {}.type
+                                )
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                        }
+                        toolCalls.forEach { tc ->
+                            Text(
+                                text = "Tool: ${tc.function?.name ?: "unknown"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            if (tc.function?.arguments?.isNotBlank() == true) {
+                                Text(
+                                    text = "Args: ${tc.function.arguments}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                                )
+                            }
+                            // Find matching result
+                            val result = toolResults.firstOrNull { it.toolCallId == tc.id }
+                            if (result != null) {
+                                Text(
+                                    text = "Result: ${result.content}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // role == "tool" messages are displayed as part of the assistant tool_calls bubble above,
+    // so we render nothing standalone for them
 }

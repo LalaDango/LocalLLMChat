@@ -32,5 +32,7 @@ data class MessageEntity(
     val summaryText: String? = null,
     val isSummarized: Boolean = false,
     val isExcluded: Boolean = false,
-    val translatedText: String? = null
+    val translatedText: String? = null,
+    val toolCallsJson: String? = null,
+    val toolCallId: String? = null
 )

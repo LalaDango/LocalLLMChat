@@ -20,8 +20,10 @@ data class ImageUrl(val url: String)
 // API-only message class (separate from DB ChatMessage)
 data class ApiChatMessage(
     val role: String,
-    val content: MessageContent,
-    val reasoningContent: String? = null
+    val content: MessageContent? = null,
+    val reasoningContent: String? = null,
+    val toolCalls: List<ToolCall>? = null,
+    val toolCallId: String? = null
 )
 
 // API request using ApiChatMessage
@@ -30,6 +32,8 @@ data class ApiChatRequest(
     val model: String,
     @SerializedName("messages")
     val messages: List<ApiChatMessage>,
+    @SerializedName("tools")
+    val tools: List<ToolDefinition>? = null,
     @SerializedName("stream")
     val stream: Boolean = false,
     @SerializedName("temperature")
@@ -84,11 +88,36 @@ class ApiChatMessageSerializer : JsonSerializer<ApiChatMessage> {
                 }
                 obj.add("content", array)
             }
+            null -> {
+                obj.add("content", JsonNull.INSTANCE)
+            }
         }
 
         if (src.reasoningContent != null) {
             obj.addProperty("reasoning_content", src.reasoningContent)
         }
+
+        if (src.toolCalls != null) {
+            val toolCallsArray = JsonArray()
+            src.toolCalls.forEach { tc ->
+                val tcObj = JsonObject()
+                if (tc.id != null) tcObj.addProperty("id", tc.id)
+                if (tc.type != null) tcObj.addProperty("type", tc.type)
+                if (tc.function != null) {
+                    val fnObj = JsonObject()
+                    if (tc.function.name != null) fnObj.addProperty("name", tc.function.name)
+                    if (tc.function.arguments != null) fnObj.addProperty("arguments", tc.function.arguments)
+                    tcObj.add("function", fnObj)
+                }
+                toolCallsArray.add(tcObj)
+            }
+            obj.add("tool_calls", toolCallsArray)
+        }
+
+        if (src.toolCallId != null) {
+            obj.addProperty("tool_call_id", src.toolCallId)
+        }
+
         return obj
     }
 }

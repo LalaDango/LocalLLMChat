@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -19,6 +20,7 @@ class SettingsRepository(private val context: Context) {
         private val MODEL_NAME_KEY = stringPreferencesKey("model_name")
         private val CONTEXT_WINDOW_SIZE_KEY = intPreferencesKey("context_window_size")
         private val SYSTEM_PROMPT_KEY = stringPreferencesKey("system_prompt")
+        private val DISABLED_TOOLS_KEY = stringSetPreferencesKey("disabled_tools")
 
         const val DEFAULT_BASE_URL = "http://localhost:8080"
         const val DEFAULT_MODEL_NAME = "lfm2.5-tk:1.2b"
@@ -42,6 +44,10 @@ class SettingsRepository(private val context: Context) {
         preferences[SYSTEM_PROMPT_KEY] ?: DEFAULT_SYSTEM_PROMPT
     }
 
+    val disabledTools: Flow<Set<String>> = context.dataStore.data.map { preferences ->
+        preferences[DISABLED_TOOLS_KEY] ?: emptySet()
+    }
+
     suspend fun saveBaseUrl(url: String) {
         context.dataStore.edit { preferences ->
             preferences[BASE_URL_KEY] = url
@@ -57,6 +63,12 @@ class SettingsRepository(private val context: Context) {
     suspend fun saveContextWindowSize(size: Int) {
         context.dataStore.edit { preferences ->
             preferences[CONTEXT_WINDOW_SIZE_KEY] = size
+        }
+    }
+
+    suspend fun saveDisabledTools(names: Set<String>) {
+        context.dataStore.edit { preferences ->
+            preferences[DISABLED_TOOLS_KEY] = names
         }
     }
 
