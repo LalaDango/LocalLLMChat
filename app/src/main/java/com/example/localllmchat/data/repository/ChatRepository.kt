@@ -13,6 +13,8 @@ import com.example.localllmchat.data.remote.ChatResponse
 import com.example.localllmchat.data.remote.ContentPart
 import com.example.localllmchat.data.remote.ImageUrl
 import com.example.localllmchat.data.remote.MessageContent
+import com.example.localllmchat.data.tool.AskUserQuestionTool
+import kotlinx.coroutines.CompletableDeferred
 import com.example.localllmchat.data.remote.ToolCall
 import com.example.localllmchat.data.remote.ToolCallFunction
 import com.example.localllmchat.data.remote.ToolDefinition
@@ -112,7 +114,8 @@ class ChatRepository(
         userMessage: String,
         attachment: ProcessedAttachment? = null,
         onStreamUpdate: ((content: String, reasoning: String) -> Unit)? = null,
-        onToolStatus: ((status: String?) -> Unit)? = null
+        onToolStatus: ((status: String?) -> Unit)? = null,
+        onAskUser: ((question: String, options: List<String>) -> CompletableDeferred<String>)? = null
     ): Result<String> {
         return try {
             // Build DB content based on attachment type
@@ -185,22 +188,29 @@ class ChatRepository(
                     prefillSpeedTps = step1Result.usage?.prefillSpeedTps
                 )
 
-                // Execute each tool and save results to DB
-                for (tc in completedToolCalls) {
-                    val toolName = tc.function?.name ?: continue
-                    val toolArgs = tc.function.arguments ?: "{}"
-                    val result = toolRegistry.execute(toolName, toolArgs)
-                    addMessage(
-                        conversationId = conversationId,
-                        role = "tool",
-                        content = result,
-                        toolCallId = tc.id
-                    )
-                }
+                // Wire up AskUserQuestion callback for this execution
+                val askTool = toolRegistry.getTool<AskUserQuestionTool>("ask_user_question")
+                try {
+                    askTool?.onAskUser = onAskUser
 
-                // Notify UI AFTER messages are saved to DB
-                // This clears streaming content; saved messages appear via Flow
-                onToolStatus?.invoke("ツール実行中...")
+                    // Notify UI that tool execution is starting
+                    onToolStatus?.invoke("ツール実行中...")
+
+                    // Execute each tool and save results to DB
+                    for (tc in completedToolCalls) {
+                        val toolName = tc.function?.name ?: continue
+                        val toolArgs = tc.function.arguments ?: "{}"
+                        val result = toolRegistry.execute(toolName, toolArgs)
+                        addMessage(
+                            conversationId = conversationId,
+                            role = "tool",
+                            content = result,
+                            toolCallId = tc.id
+                        )
+                    }
+                } finally {
+                    askTool?.onAskUser = null
+                }
 
                 // Clear tool status before Step 3 streaming starts
                 onToolStatus?.invoke(null)

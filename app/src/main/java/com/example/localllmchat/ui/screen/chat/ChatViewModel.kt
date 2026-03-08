@@ -8,10 +8,17 @@ import com.example.localllmchat.data.local.MessageEntity
 import com.example.localllmchat.data.repository.ChatRepository
 import com.example.localllmchat.data.repository.SettingsRepository
 import com.example.localllmchat.util.ProcessedAttachment
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+data class AskUserDialogState(
+    val question: String,
+    val options: List<String>,
+    val deferred: CompletableDeferred<String>
+)
 
 data class ChatUiState(
     val conversation: ConversationEntity? = null,
@@ -30,6 +37,7 @@ data class ChatUiState(
     val summarizeToast: String? = null,
     val translatingMessageId: Long? = null,
     val toolExecutionStatus: String? = null,
+    val askUserDialog: AskUserDialogState? = null,
     val availableTools: List<String> = emptyList(),
     val toolDescriptions: Map<String, String> = emptyMap(),
     val disabledTools: Set<String> = emptySet(),
@@ -166,6 +174,13 @@ class ChatViewModel(
                         streamingContent = "",
                         streamingReasoning = ""
                     )
+                },
+                onAskUser = { question, options ->
+                    val deferred = CompletableDeferred<String>()
+                    _uiState.value = _uiState.value.copy(
+                        askUserDialog = AskUserDialogState(question, options, deferred)
+                    )
+                    deferred
                 }
             )
             result.fold(
@@ -258,6 +273,18 @@ class ChatViewModel(
 
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    fun answerAskUserQuestion(answer: String) {
+        val dialog = _uiState.value.askUserDialog ?: return
+        dialog.deferred.complete(answer)
+        _uiState.value = _uiState.value.copy(askUserDialog = null)
+    }
+
+    fun cancelAskUserQuestion() {
+        val dialog = _uiState.value.askUserDialog ?: return
+        dialog.deferred.complete("User cancelled")
+        _uiState.value = _uiState.value.copy(askUserDialog = null)
     }
 
     class Factory(

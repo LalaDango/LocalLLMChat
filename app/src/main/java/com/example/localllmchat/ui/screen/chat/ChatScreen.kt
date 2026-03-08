@@ -58,6 +58,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -163,6 +164,14 @@ fun ChatScreen(
         OriginalTextDialog(
             content = message.content,
             onDismiss = { showOriginalTextFor = null }
+        )
+    }
+
+    uiState.askUserDialog?.let { dialogState ->
+        AskUserQuestionDialog(
+            state = dialogState,
+            onAnswer = viewModel::answerAskUserQuestion,
+            onCancel = viewModel::cancelAskUserQuestion
         )
     }
 
@@ -1160,4 +1169,71 @@ private fun ToolCallBubble(
     }
     // role == "tool" messages are displayed as part of the assistant tool_calls bubble above,
     // so we render nothing standalone for them
+}
+
+@Composable
+private fun AskUserQuestionDialog(
+    state: AskUserDialogState,
+    onAnswer: (String) -> Unit,
+    onCancel: () -> Unit
+) {
+    var customText by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = {
+            Text("質問")
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = state.question,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                state.options.forEach { option ->
+                    OutlinedButton(
+                        onClick = { onAnswer("User selected: $option") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Text(option)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = customText,
+                    onValueChange = { customText = it },
+                    label = { Text("自由記述") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = false,
+                    maxLines = 3
+                )
+
+                TextButton(
+                    onClick = {
+                        if (customText.isNotBlank()) {
+                            onAnswer("User's custom answer: ${customText.trim()}")
+                        }
+                    },
+                    enabled = customText.isNotBlank(),
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("送信")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onCancel) {
+                Text("キャンセル")
+            }
+        }
+    )
 }

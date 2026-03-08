@@ -22,6 +22,11 @@ class ToolRegistry {
         return defs.ifEmpty { null }
     }
 
+    fun <T : ToolHandler> getTool(name: String): T? {
+        @Suppress("UNCHECKED_CAST")
+        return tools[name] as? T
+    }
+
     fun getAvailableToolNames(): List<String> = tools.keys.toList()
 
     fun getToolDescriptions(): Map<String, String> =
