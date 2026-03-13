@@ -32,6 +32,7 @@ class LocalLLMChatApp : Application() {
             register("ask_user_question", AskUserQuestionTool())
         }
         chatRepository = ChatRepository(
+            database = database,
             conversationDao = database.conversationDao(),
             messageDao = database.messageDao(),
             settingsRepository = settingsRepository,

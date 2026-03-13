@@ -26,4 +26,7 @@ interface ConversationDao {
 
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("UPDATE conversations SET activeRootMessageId = :activeRootMessageId WHERE id = :conversationId")
+    suspend fun updateActiveRootMessageId(conversationId: Long, activeRootMessageId: Long?)
 }

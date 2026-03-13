@@ -47,6 +47,10 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Summarize
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -301,10 +305,26 @@ fun ChatScreen(
                 ) { message ->
                     val density = LocalDensity.current
                     val cachedHeight = messageHeightCache[message.id]
+                    val siblingInfo = uiState.siblingInfoMap[message.id]
+                    val isEditing = uiState.editingMessageId == message.id
+                    val isLastAssistant = message.role == "assistant" &&
+                        message.toolCallsJson == null &&
+                        message.id == uiState.messages.lastOrNull { it.role == "assistant" && it.toolCallsJson == null }?.id
+                    val editingIdx = uiState.editingMessageId?.let { editId ->
+                        uiState.messages.indexOfFirst { it.id == editId }
+                    }
+                    val messageIdx = uiState.messages.indexOf(message)
+                    val isAfterEditing = editingIdx != null && messageIdx > editingIdx
 
-                    // Tool-related messages: show collapsible tool call bubble
-                    if (message.role == "assistant" && message.toolCallsJson != null) {
-                        // Show Step 1 reasoning as a regular bubble above tool call info
+                    // Inline editing mode
+                    if (isEditing) {
+                        EditableMessageBubble(
+                            editText = uiState.editingText,
+                            onTextChange = viewModel::updateEditText,
+                            onSubmit = viewModel::submitEdit,
+                            onCancel = viewModel::cancelEdit
+                        )
+                    } else if (message.role == "assistant" && message.toolCallsJson != null) {
                         val hasReasoning = message.content.contains("<think>")
                         if (hasReasoning) {
                             MessageBubble(
@@ -316,7 +336,10 @@ fun ChatScreen(
                                 onSummarize = {},
                                 onShowOriginal = {},
                                 onExcludeToggle = {},
-                                onTranslate = {}
+                                onTranslate = {},
+                                siblingInfo = siblingInfo,
+                                onSwitchBranch = viewModel::switchBranch,
+                                modifier = Modifier.alpha(if (isAfterEditing) 0.35f else 1f)
                             )
                         }
                         ToolCallBubble(
@@ -353,7 +376,15 @@ fun ChatScreen(
                         onTranslate = {
                             viewModel.translateMessage(message.id, message.content)
                         },
-                        modifier = (if (cachedHeight != null) {
+                        siblingInfo = siblingInfo,
+                        onSwitchBranch = viewModel::switchBranch,
+                        onEdit = if (message.role == "user" && !uiState.isLoading) {
+                            { viewModel.editMessage(message.id) }
+                        } else null,
+                        onRegenerate = if (isLastAssistant && !uiState.isLoading) {
+                            { viewModel.regenerateResponse() }
+                        } else null,
+                        modifier = ((if (cachedHeight != null) {
                             Modifier.defaultMinSize(minHeight = with(density) { cachedHeight.toDp() })
                         } else {
                             Modifier
@@ -362,7 +393,7 @@ fun ChatScreen(
                             if (height > 0 && messageHeightCache[message.id] != height) {
                                 messageHeightCache[message.id] = height
                             }
-                        }
+                        }).alpha(if (isAfterEditing) 0.35f else 1f)
                     )
                     }
                 }
@@ -404,6 +435,7 @@ fun ChatScreen(
                 }
             }
 
+            val isEditMode = uiState.editingMessageId != null
             ChatInput(
                 text = uiState.inputText,
                 onTextChange = viewModel::updateInputText,
@@ -428,7 +460,10 @@ fun ChatScreen(
                 disabledTools = uiState.disabledTools,
                 modelSupportsTools = uiState.modelSupportsTools,
                 onToggleTool = viewModel::toggleTool,
-                modifier = Modifier.padding(16.dp)
+                modifier = Modifier
+                    .padding(16.dp)
+                    .alpha(if (isEditMode) 0.4f else 1f)
+                    .then(if (isEditMode) Modifier.clickable(enabled = false) {} else Modifier)
             )
         }
 
@@ -631,6 +666,10 @@ private fun MessageBubble(
     onShowOriginal: () -> Unit,
     onExcludeToggle: () -> Unit,
     onTranslate: () -> Unit,
+    siblingInfo: ChatRepository.SiblingInfo? = null,
+    onSwitchBranch: (Long) -> Unit = {},
+    onEdit: (() -> Unit)? = null,
+    onRegenerate: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isUser = message.role == "user"
@@ -741,6 +780,48 @@ private fun MessageBubble(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Branch navigation
+                    if (siblingInfo != null && siblingInfo.totalSiblings > 1) {
+                        BranchNavigator(
+                            siblingInfo = siblingInfo,
+                            onPrevious = {
+                                val prevIdx = siblingInfo.currentIndex - 1
+                                if (prevIdx >= 0) onSwitchBranch(siblingInfo.siblingIds[prevIdx])
+                            },
+                            onNext = {
+                                val nextIdx = siblingInfo.currentIndex + 1
+                                if (nextIdx < siblingInfo.totalSiblings) onSwitchBranch(siblingInfo.siblingIds[nextIdx])
+                            }
+                        )
+                    }
+                    // Edit button (user messages only)
+                    if (onEdit != null) {
+                        IconButton(
+                            onClick = onEdit,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Edit,
+                                contentDescription = "Edit message",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            )
+                        }
+                    }
+                    // Regenerate button (last assistant message only)
+                    if (onRegenerate != null) {
+                        IconButton(
+                            onClick = onRegenerate,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Refresh,
+                                contentDescription = "Regenerate response",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            )
+                        }
+                    }
                     // Translate button
                     if (message.translatedText == null) {
                         if (isTranslating) {
@@ -814,6 +895,103 @@ private fun MessageBubble(
                     CopyButton(onClick = { onCopyMessage(plainTextContent) })
                     if (hasUsageData) {
                         InfoButton(onClick = onInfoClick)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BranchNavigator(
+    siblingInfo: ChatRepository.SiblingInfo,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(
+            onClick = onPrevious,
+            enabled = siblingInfo.currentIndex > 0,
+            modifier = Modifier.size(28.dp)
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                contentDescription = "Previous branch",
+                modifier = Modifier.size(18.dp),
+                tint = if (siblingInfo.currentIndex > 0)
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                else
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+            )
+        }
+        Text(
+            text = "${siblingInfo.currentIndex + 1}/${siblingInfo.totalSiblings}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+        IconButton(
+            onClick = onNext,
+            enabled = siblingInfo.currentIndex < siblingInfo.totalSiblings - 1,
+            modifier = Modifier.size(28.dp)
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Next branch",
+                modifier = Modifier.size(18.dp),
+                tint = if (siblingInfo.currentIndex < siblingInfo.totalSiblings - 1)
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                else
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun EditableMessageBubble(
+    editText: String,
+    onTextChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End
+    ) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 340.dp)
+                .background(
+                    color = UserMessageBg,
+                    shape = RoundedCornerShape(16.dp)
+                )
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = editText,
+                    onValueChange = onTextChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    minLines = 2,
+                    maxLines = 10
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onCancel) {
+                        Text("キャンセル")
+                    }
+                    TextButton(
+                        onClick = onSubmit,
+                        enabled = editText.isNotBlank()
+                    ) {
+                        Text("保存")
                     }
                 }
             }

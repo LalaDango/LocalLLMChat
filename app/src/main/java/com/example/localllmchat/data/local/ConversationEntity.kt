@@ -9,5 +9,6 @@ data class ConversationEntity(
     val id: Long = 0,
     val title: String,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val activeRootMessageId: Long? = null
 )

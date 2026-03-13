@@ -27,4 +27,26 @@ interface MessageDao {
 
     @Query("UPDATE messages SET translatedText = :translatedText WHERE id = :messageId")
     suspend fun updateTranslation(messageId: Long, translatedText: String)
+
+    // Branch feature queries
+    @Query("SELECT * FROM messages WHERE id = :messageId")
+    suspend fun getMessageById(messageId: Long): MessageEntity?
+
+    @Query("SELECT * FROM messages WHERE parentMessageId = :parentId ORDER BY siblingIndex ASC")
+    suspend fun getChildMessages(parentId: Long): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE parentMessageId IS NULL AND conversationId = :conversationId ORDER BY siblingIndex ASC")
+    suspend fun getRootMessages(conversationId: Long): List<MessageEntity>
+
+    @Query("UPDATE messages SET activeChildId = :activeChildId WHERE id = :messageId")
+    suspend fun updateActiveChildId(messageId: Long, activeChildId: Long?)
+
+    @Query("UPDATE messages SET parentMessageId = :parentId, siblingIndex = :siblingIndex WHERE id = :messageId")
+    suspend fun updateParentAndIndex(messageId: Long, parentId: Long?, siblingIndex: Int)
+
+    @Query("SELECT COUNT(*) FROM messages WHERE parentMessageId = :parentId")
+    suspend fun getSiblingCount(parentId: Long): Int
+
+    @Query("SELECT COUNT(*) FROM messages WHERE parentMessageId IS NULL AND conversationId = :conversationId")
+    suspend fun getRootSiblingCount(conversationId: Long): Int
 }

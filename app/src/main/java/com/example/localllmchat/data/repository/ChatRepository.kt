@@ -24,17 +24,21 @@ import com.example.localllmchat.util.ProcessedAttachment
 import com.example.localllmchat.data.remote.ChatMessage
 import com.example.localllmchat.data.remote.ChatRequest
 import android.util.Log
+import androidx.room.withTransaction
+import com.example.localllmchat.data.local.AppDatabase
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
 class ChatRepository(
+    private val database: AppDatabase,
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao,
     private val settingsRepository: SettingsRepository,
@@ -79,6 +83,8 @@ class ChatRepository(
         conversationId: Long,
         role: String,
         content: String,
+        parentMessageId: Long? = null,
+        siblingIndex: Int = 0,
         promptTokens: Int? = null,
         completionTokens: Int? = null,
         totalTokens: Int? = null,
@@ -91,6 +97,8 @@ class ChatRepository(
             conversationId = conversationId,
             role = role,
             content = content,
+            parentMessageId = parentMessageId,
+            siblingIndex = siblingIndex,
             promptTokens = promptTokens,
             completionTokens = completionTokens,
             totalTokens = totalTokens,
@@ -99,7 +107,15 @@ class ChatRepository(
             toolCallsJson = toolCallsJson,
             toolCallId = toolCallId
         )
-        val messageId = messageDao.insert(message)
+        val messageId = database.withTransaction {
+            val newId = messageDao.insert(message)
+            if (parentMessageId != null) {
+                messageDao.updateActiveChildId(parentMessageId, newId)
+            } else {
+                conversationDao.updateActiveRootMessageId(conversationId, newId)
+            }
+            newId
+        }
 
         val conversation = conversationDao.getConversationById(conversationId)
         if (conversation != null) {
@@ -129,147 +145,166 @@ class ChatRepository(
                 }
                 null -> userMessage
             }
-            addMessage(conversationId, "user", dbContent)
 
-            val baseUrl = settingsRepository.baseUrl.first()
-            val modelName = settingsRepository.modelName.first()
-            val systemPrompt = settingsRepository.systemPrompt.first()
-            val disabledTools = settingsRepository.disabledTools.first()
-            val toolDefinitions = toolRegistry.getDefinitions(modelName, disabledTools)
+            // Determine parent: last message in the current active path
+            val activePath = getActivePathMessages(conversationId)
+            val parentId = activePath.lastOrNull()?.id
 
-            val api = ApiClient.getChatApi(baseUrl)
+            val userMsgId = addMessage(conversationId, "user", dbContent, parentMessageId = parentId)
 
-            // Build API messages from DB and send Step 1
-            val toolsEnabled = toolDefinitions != null
-            val step1Messages = buildApiMessages(conversationId, attachment, userMessage, systemPrompt, toolsEnabled)
-            val step1Request = ApiChatRequest(
-                model = modelName,
-                messages = step1Messages,
-                tools = toolDefinitions,
-                stream = true
+            generateResponse(
+                conversationId = conversationId,
+                parentMessageId = userMsgId,
+                attachment = attachment,
+                userMessage = userMessage,
+                onStreamUpdate = onStreamUpdate,
+                onToolStatus = onToolStatus,
+                onAskUser = onAskUser
             )
-
-            val step1Result = streamApiCall(
-                api = api,
-                request = step1Request,
-                onStreamUpdate = onStreamUpdate
-            )
-
-            // Check if model requested tool calls
-            if (step1Result.toolCallMap.isNotEmpty()) {
-                // Build completed tool calls
-                val completedToolCalls = step1Result.toolCallMap.values.map { acc ->
-                    // Generate a proper UUID if server returns invalid id (e.g. "generate_id()")
-                    val toolCallId = if (acc.id.isNullOrBlank() || acc.id!!.contains("("))
-                        "call_${java.util.UUID.randomUUID()}"
-                    else acc.id!!
-                    ToolCall(
-                        id = toolCallId,
-                        type = "function",
-                        function = ToolCallFunction(
-                            name = acc.name,
-                            arguments = acc.arguments.toString()
-                        )
-                    )
-                }
-                val toolCallsJson = gson.toJson(completedToolCalls)
-
-                // Save assistant message with tool_calls to DB (include reasoning from Step 1)
-                val assistantContent = buildRawMessage(step1Result)
-                addMessage(
-                    conversationId = conversationId,
-                    role = "assistant",
-                    content = assistantContent.ifEmpty { "" },
-                    toolCallsJson = toolCallsJson,
-                    promptTokens = step1Result.usage?.promptTokens,
-                    completionTokens = step1Result.usage?.completionTokens,
-                    totalTokens = step1Result.usage?.totalTokens,
-                    decodingSpeedTps = step1Result.usage?.decodingSpeedTps,
-                    prefillSpeedTps = step1Result.usage?.prefillSpeedTps
-                )
-
-                // Wire up AskUserQuestion callback for this execution
-                val askTool = toolRegistry.getTool<AskUserQuestionTool>("ask_user_question")
-                try {
-                    askTool?.onAskUser = onAskUser
-
-                    // Notify UI that tool execution is starting
-                    onToolStatus?.invoke("ツール実行中...")
-
-                    // Execute each tool and save results to DB
-                    for (tc in completedToolCalls) {
-                        val toolName = tc.function?.name ?: continue
-                        val toolArgs = tc.function.arguments ?: "{}"
-                        val result = toolRegistry.execute(toolName, toolArgs)
-                        addMessage(
-                            conversationId = conversationId,
-                            role = "tool",
-                            content = result,
-                            toolCallId = tc.id
-                        )
-                    }
-                } finally {
-                    askTool?.onAskUser = null
-                }
-
-                // Clear tool status before Step 3 streaming starts
-                onToolStatus?.invoke(null)
-
-                // Step 3: Rebuild full history from DB (now includes tool messages) and send again
-                val step3Messages = buildApiMessages(conversationId, null, "", systemPrompt)
-                val step3Request = ApiChatRequest(
-                    model = modelName,
-                    messages = step3Messages,
-                    tools = toolDefinitions,
-                    stream = true
-                )
-
-                val step3Result = streamApiCall(
-                    api = api,
-                    request = step3Request,
-                    onStreamUpdate = onStreamUpdate
-                )
-
-                // Save final response
-                val rawMessage = buildRawMessage(step3Result)
-                val assistantMessage = cleanupIncompleteThinkTags(rawMessage)
-
-                addMessage(
-                    conversationId = conversationId,
-                    role = "assistant",
-                    content = assistantMessage,
-                    promptTokens = step3Result.usage?.promptTokens,
-                    completionTokens = step3Result.usage?.completionTokens,
-                    totalTokens = step3Result.usage?.totalTokens,
-                    decodingSpeedTps = step3Result.usage?.decodingSpeedTps,
-                    prefillSpeedTps = step3Result.usage?.prefillSpeedTps
-                )
-
-                updateConversationTitleIfNeeded(conversationId)
-                Result.success(assistantMessage)
-            } else {
-                // Normal text response (no tool calls)
-                val rawMessage = buildRawMessage(step1Result)
-                val assistantMessage = cleanupIncompleteThinkTags(rawMessage)
-
-                addMessage(
-                    conversationId = conversationId,
-                    role = "assistant",
-                    content = assistantMessage,
-                    promptTokens = step1Result.usage?.promptTokens,
-                    completionTokens = step1Result.usage?.completionTokens,
-                    totalTokens = step1Result.usage?.totalTokens,
-                    decodingSpeedTps = step1Result.usage?.decodingSpeedTps,
-                    prefillSpeedTps = step1Result.usage?.prefillSpeedTps
-                )
-
-                updateConversationTitleIfNeeded(conversationId)
-                Result.success(assistantMessage)
-            }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
+
+    // Shared method: stream API response, handle tool calls, save result messages
+    private suspend fun generateResponse(
+        conversationId: Long,
+        parentMessageId: Long,
+        siblingIndex: Int = 0,
+        attachment: ProcessedAttachment? = null,
+        userMessage: String = "",
+        onStreamUpdate: ((content: String, reasoning: String) -> Unit)? = null,
+        onToolStatus: ((status: String?) -> Unit)? = null,
+        onAskUser: ((question: String, options: List<String>) -> CompletableDeferred<String>)? = null
+    ): Result<String> {
+        val baseUrl = settingsRepository.baseUrl.first()
+        val modelName = settingsRepository.modelName.first()
+        val systemPrompt = settingsRepository.systemPrompt.first()
+        val disabledTools = settingsRepository.disabledTools.first()
+        val toolDefinitions = toolRegistry.getDefinitions(modelName, disabledTools)
+
+        val api = ApiClient.getChatApi(baseUrl)
+
+        val toolsEnabled = toolDefinitions != null
+        val step1Messages = buildApiMessages(conversationId, attachment, userMessage, systemPrompt, toolsEnabled, upToMessageId = parentMessageId)
+        val step1Request = ApiChatRequest(
+            model = modelName,
+            messages = step1Messages,
+            tools = toolDefinitions,
+            stream = true
+        )
+
+        val step1Result = streamApiCall(api, step1Request, onStreamUpdate)
+
+        if (step1Result.toolCallMap.isNotEmpty()) {
+            val completedToolCalls = step1Result.toolCallMap.values.map { acc ->
+                val toolCallId = if (acc.id.isNullOrBlank() || acc.id!!.contains("("))
+                    "call_${java.util.UUID.randomUUID()}"
+                else acc.id!!
+                ToolCall(
+                    id = toolCallId,
+                    type = "function",
+                    function = ToolCallFunction(name = acc.name, arguments = acc.arguments.toString())
+                )
+            }
+            val toolCallsJson = gson.toJson(completedToolCalls)
+
+            val assistantContent = buildRawMessage(step1Result)
+            var lastMsgId = addMessage(
+                conversationId = conversationId,
+                role = "assistant",
+                content = assistantContent.ifEmpty { "" },
+                parentMessageId = parentMessageId,
+                siblingIndex = siblingIndex,
+                toolCallsJson = toolCallsJson,
+                promptTokens = step1Result.usage?.promptTokens,
+                completionTokens = step1Result.usage?.completionTokens,
+                totalTokens = step1Result.usage?.totalTokens,
+                decodingSpeedTps = step1Result.usage?.decodingSpeedTps,
+                prefillSpeedTps = step1Result.usage?.prefillSpeedTps
+            )
+
+            val askTool = toolRegistry.getTool<AskUserQuestionTool>("ask_user_question")
+            try {
+                askTool?.onAskUser = onAskUser
+                onToolStatus?.invoke("ツール実行中...")
+
+                for (tc in completedToolCalls) {
+                    val toolName = tc.function?.name ?: continue
+                    val toolArgs = tc.function.arguments ?: "{}"
+                    val result = toolRegistry.execute(toolName, toolArgs)
+                    lastMsgId = addMessage(
+                        conversationId = conversationId,
+                        role = "tool",
+                        content = result,
+                        parentMessageId = lastMsgId,
+                        toolCallId = tc.id
+                    )
+                }
+            } finally {
+                askTool?.onAskUser = null
+            }
+
+            onToolStatus?.invoke(null)
+
+            val step3Messages = buildApiMessages(conversationId, null, "", systemPrompt)
+            val step3Request = ApiChatRequest(
+                model = modelName,
+                messages = step3Messages,
+                tools = toolDefinitions,
+                stream = true
+            )
+
+            val step3Result = streamApiCall(api, step3Request, onStreamUpdate)
+            val rawMessage = buildRawMessage(step3Result)
+            val assistantMessage = cleanupIncompleteThinkTags(rawMessage)
+
+            addMessage(
+                conversationId = conversationId,
+                role = "assistant",
+                content = assistantMessage,
+                parentMessageId = lastMsgId,
+                promptTokens = step3Result.usage?.promptTokens,
+                completionTokens = step3Result.usage?.completionTokens,
+                totalTokens = step3Result.usage?.totalTokens,
+                decodingSpeedTps = step3Result.usage?.decodingSpeedTps,
+                prefillSpeedTps = step3Result.usage?.prefillSpeedTps
+            )
+
+            updateConversationTitleIfNeeded(conversationId)
+            return Result.success(assistantMessage)
+        } else {
+            val rawMessage = buildRawMessage(step1Result)
+            val assistantMessage = cleanupIncompleteThinkTags(rawMessage)
+
+            addMessage(
+                conversationId = conversationId,
+                role = "assistant",
+                content = assistantMessage,
+                parentMessageId = parentMessageId,
+                siblingIndex = siblingIndex,
+                promptTokens = step1Result.usage?.promptTokens,
+                completionTokens = step1Result.usage?.completionTokens,
+                totalTokens = step1Result.usage?.totalTokens,
+                decodingSpeedTps = step1Result.usage?.decodingSpeedTps,
+                prefillSpeedTps = step1Result.usage?.prefillSpeedTps
+            )
+
+            updateConversationTitleIfNeeded(conversationId)
+            return Result.success(assistantMessage)
+        }
+    }
+
+    data class SiblingInfo(
+        val currentIndex: Int,
+        val totalSiblings: Int,
+        val siblingIds: List<Long>
+    )
+
+    data class ActivePathResult(
+        val messages: List<MessageEntity>,
+        val siblingInfoMap: Map<Long, SiblingInfo>
+    )
 
     private data class StreamResult(
         val contentBuilder: StringBuilder,
@@ -360,15 +395,240 @@ class ChatRepository(
         return StreamResult(contentBuilder, reasoningBuilder, toolCallMap, finishReason, usage)
     }
 
+    // ── Branch feature: active path resolution ──
+
+    fun getActivePathFlow(conversationId: Long): Flow<ActivePathResult> {
+        return messageDao.getMessagesForConversation(conversationId).map { allMessages ->
+            if (allMessages.isEmpty()) return@map ActivePathResult(emptyList(), emptyMap())
+
+            val conversation = conversationDao.getConversationById(conversationId)
+
+            // Lazy migration for pre-branch conversations
+            if (conversation?.activeRootMessageId == null && allMessages.isNotEmpty()) {
+                val needsMigration = allMessages.none { it.parentMessageId != null || it.activeChildId != null }
+                if (needsMigration) {
+                    migrateConversationIfNeeded(conversationId, allMessages)
+                    val freshMessages = messageDao.getMessagesForConversationSync(conversationId)
+                    val freshConversation = conversationDao.getConversationById(conversationId)
+                    return@map computeActivePathInternal(freshConversation, freshMessages)
+                }
+            }
+
+            computeActivePathInternal(conversation, allMessages)
+        }
+    }
+
+    suspend fun getActivePathMessages(conversationId: Long): List<MessageEntity> {
+        val allMessages = messageDao.getMessagesForConversationSync(conversationId)
+        if (allMessages.isEmpty()) return emptyList()
+
+        val conversation = conversationDao.getConversationById(conversationId)
+
+        if (conversation?.activeRootMessageId == null && allMessages.isNotEmpty()) {
+            val needsMigration = allMessages.none { it.parentMessageId != null || it.activeChildId != null }
+            if (needsMigration) {
+                migrateConversationIfNeeded(conversationId, allMessages)
+                val freshMessages = messageDao.getMessagesForConversationSync(conversationId)
+                val freshConversation = conversationDao.getConversationById(conversationId)
+                return computeActivePathInternal(freshConversation, freshMessages).messages
+            }
+        }
+
+        return computeActivePathInternal(conversation, allMessages).messages
+    }
+
+    private fun computeActivePathInternal(
+        conversation: ConversationEntity?,
+        allMessages: List<MessageEntity>
+    ): ActivePathResult {
+        if (allMessages.isEmpty()) return ActivePathResult(emptyList(), emptyMap())
+
+        val msgMap = allMessages.associateBy { it.id }
+
+        // Find root message
+        val rootMsg = conversation?.activeRootMessageId?.let { msgMap[it] }
+            ?: allMessages.filter { it.parentMessageId == null }.minByOrNull { it.createdAt }
+            ?: return ActivePathResult(emptyList(), emptyMap())
+
+        // Walk the activeChildId chain
+        val path = mutableListOf<MessageEntity>()
+        var current: MessageEntity? = rootMsg
+        val visited = mutableSetOf<Long>() // guard against cycles
+        while (current != null) {
+            if (!visited.add(current.id)) break
+            path.add(current)
+            val childId = current.activeChildId ?: break
+            current = msgMap[childId]
+        }
+
+        // Compute sibling info for each message in the path
+        val childrenByParent = allMessages.filter { it.parentMessageId != null }.groupBy { it.parentMessageId }
+        val rootMessages = allMessages.filter { it.parentMessageId == null }.sortedBy { it.siblingIndex }
+
+        val siblingInfoMap = mutableMapOf<Long, SiblingInfo>()
+        for (msg in path) {
+            val siblings = if (msg.parentMessageId == null) {
+                rootMessages
+            } else {
+                childrenByParent[msg.parentMessageId]?.sortedBy { it.siblingIndex } ?: listOf(msg)
+            }
+
+            if (siblings.size > 1) {
+                val currentIdx = siblings.indexOfFirst { it.id == msg.id }
+                siblingInfoMap[msg.id] = SiblingInfo(
+                    currentIndex = if (currentIdx >= 0) currentIdx else 0,
+                    totalSiblings = siblings.size,
+                    siblingIds = siblings.map { it.id }
+                )
+            }
+        }
+
+        // Propagate siblingInfo from tool_calls ancestor to final response
+        // So the BranchNavigator appears on the response MessageBubble, not ToolCallBubble
+        for (i in path.indices) {
+            val msg = path[i]
+            if (msg.role == "assistant" && msg.toolCallsJson == null && msg.id !in siblingInfoMap) {
+                var j = i - 1
+                while (j >= 0 && path[j].role == "tool") j--
+                if (j >= 0 && path[j].role == "assistant" && path[j].toolCallsJson != null) {
+                    val ancestorInfo = siblingInfoMap[path[j].id]
+                    if (ancestorInfo != null) {
+                        siblingInfoMap[msg.id] = ancestorInfo
+                    }
+                }
+            }
+        }
+
+        return ActivePathResult(path, siblingInfoMap)
+    }
+
+    private suspend fun migrateConversationIfNeeded(conversationId: Long, allMessages: List<MessageEntity>) {
+        database.withTransaction {
+            val sorted = allMessages.sortedBy { it.createdAt }
+            for (i in sorted.indices) {
+                val parentId = if (i > 0) sorted[i - 1].id else null
+                val activeChild = if (i < sorted.lastIndex) sorted[i + 1].id else null
+                messageDao.updateParentAndIndex(sorted[i].id, parentId, 0)
+                messageDao.updateActiveChildId(sorted[i].id, activeChild)
+            }
+            if (sorted.isNotEmpty()) {
+                conversationDao.updateActiveRootMessageId(conversationId, sorted.first().id)
+            }
+        }
+    }
+
+    suspend fun regenerateLastResponse(
+        conversationId: Long,
+        onStreamUpdate: ((content: String, reasoning: String) -> Unit)? = null,
+        onToolStatus: ((status: String?) -> Unit)? = null,
+        onAskUser: ((question: String, options: List<String>) -> CompletableDeferred<String>)? = null
+    ): Result<String> {
+        return try {
+            val activePath = getActivePathMessages(conversationId)
+            // Find the last assistant message and its parent (user message)
+            val lastAssistant = activePath.lastOrNull { it.role == "assistant" }
+                ?: return Result.failure(Exception("No assistant message to regenerate"))
+
+            // Walk up the parent chain to find the user message
+            // (skip tool chain: assistant(tool_calls) → tool → ... → assistant(final))
+            var parentId = lastAssistant.parentMessageId
+                ?: return Result.failure(Exception("Assistant message has no parent"))
+            var parentMsg = messageDao.getMessageById(parentId)
+            while (parentMsg != null && parentMsg.role != "user") {
+                parentId = parentMsg.parentMessageId ?: break
+                parentMsg = messageDao.getMessageById(parentId)
+            }
+            // Fallback if we couldn't find a user message (shouldn't happen normally)
+            if (parentMsg?.role != "user") {
+                parentId = lastAssistant.parentMessageId!!
+            }
+
+            // Calculate siblingIndex for the new assistant response
+            val siblingIndex = messageDao.getSiblingCount(parentId)
+
+            generateResponse(
+                conversationId = conversationId,
+                parentMessageId = parentId,
+                siblingIndex = siblingIndex,
+                onStreamUpdate = onStreamUpdate,
+                onToolStatus = onToolStatus,
+                onAskUser = onAskUser
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun editAndResend(
+        conversationId: Long,
+        originalMessageId: Long,
+        newContent: String,
+        onStreamUpdate: ((content: String, reasoning: String) -> Unit)? = null,
+        onToolStatus: ((status: String?) -> Unit)? = null,
+        onAskUser: ((question: String, options: List<String>) -> CompletableDeferred<String>)? = null
+    ): Result<String> {
+        return try {
+            val originalMsg = messageDao.getMessageById(originalMessageId)
+                ?: return Result.failure(Exception("Original message not found"))
+
+            // New user message is a sibling of the original
+            val grandparentId = originalMsg.parentMessageId
+            val siblingIndex = if (grandparentId != null) {
+                messageDao.getSiblingCount(grandparentId)
+            } else {
+                messageDao.getRootSiblingCount(originalMsg.conversationId)
+            }
+
+            val userMsgId = addMessage(
+                conversationId = conversationId,
+                role = "user",
+                content = newContent,
+                parentMessageId = grandparentId,
+                siblingIndex = siblingIndex
+            )
+
+            // If editing a root message, activeRootMessageId is already updated by addMessage()
+
+            generateResponse(
+                conversationId = conversationId,
+                parentMessageId = userMsgId,
+                onStreamUpdate = onStreamUpdate,
+                onToolStatus = onToolStatus,
+                onAskUser = onAskUser
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun switchBranch(conversationId: Long, targetMessageId: Long) {
+        val targetMsg = messageDao.getMessageById(targetMessageId) ?: return
+        if (targetMsg.parentMessageId == null) {
+            // Root switch
+            conversationDao.updateActiveRootMessageId(conversationId, targetMessageId)
+            // Touch messages table to trigger Flow re-emission
+            messageDao.updateActiveChildId(targetMessageId, targetMsg.activeChildId)
+        } else {
+            messageDao.updateActiveChildId(targetMsg.parentMessageId, targetMessageId)
+        }
+    }
+
     private suspend fun buildApiMessages(
         conversationId: Long,
         attachment: ProcessedAttachment?,
         userMessage: String,
         systemPrompt: String,
-        toolsEnabled: Boolean = true
+        toolsEnabled: Boolean = true,
+        upToMessageId: Long? = null
     ): List<ApiChatMessage> {
-        val allMessages = messageDao.getMessagesForConversationSync(conversationId)
-        val messages = allMessages.filter { msg ->
+        var activePathMessages = getActivePathMessages(conversationId)
+        if (upToMessageId != null) {
+            val idx = activePathMessages.indexOfFirst { it.id == upToMessageId }
+            if (idx >= 0) {
+                activePathMessages = activePathMessages.subList(0, idx + 1)
+            }
+        }
+        val messages = activePathMessages.filter { msg ->
             !msg.isExcluded &&
             (toolsEnabled || (msg.role != "tool" && msg.toolCallsJson == null))
         }

@@ -41,7 +41,10 @@ data class ChatUiState(
     val availableTools: List<String> = emptyList(),
     val toolDescriptions: Map<String, String> = emptyMap(),
     val disabledTools: Set<String> = emptySet(),
-    val modelSupportsTools: Boolean = false
+    val modelSupportsTools: Boolean = false,
+    val siblingInfoMap: Map<Long, ChatRepository.SiblingInfo> = emptyMap(),
+    val editingMessageId: Long? = null,
+    val editingText: String = ""
 )
 
 class ChatViewModel(
@@ -69,9 +72,12 @@ class ChatViewModel(
 
     private fun loadMessages() {
         viewModelScope.launch {
-            chatRepository.getMessagesForConversation(conversationId).collect { messages ->
-                _uiState.value = _uiState.value.copy(messages = messages)
-                updateSessionTokenCount(messages)
+            chatRepository.getActivePathFlow(conversationId).collect { result ->
+                _uiState.value = _uiState.value.copy(
+                    messages = result.messages,
+                    siblingInfoMap = result.siblingInfoMap
+                )
+                updateSessionTokenCount(result.messages)
             }
         }
     }
@@ -285,6 +291,145 @@ class ChatViewModel(
         val dialog = _uiState.value.askUserDialog ?: return
         dialog.deferred.complete("User cancelled")
         _uiState.value = _uiState.value.copy(askUserDialog = null)
+    }
+
+    // ── Branch feature methods ──
+
+    fun regenerateResponse() {
+        _uiState.value = _uiState.value.copy(
+            isLoading = true,
+            error = null,
+            streamingContent = "",
+            streamingReasoning = ""
+        )
+        viewModelScope.launch {
+            val result = chatRepository.regenerateLastResponse(
+                conversationId = conversationId,
+                onStreamUpdate = { content, reasoning ->
+                    _uiState.value = _uiState.value.copy(
+                        streamingContent = content,
+                        streamingReasoning = reasoning
+                    )
+                },
+                onToolStatus = { status ->
+                    _uiState.value = _uiState.value.copy(
+                        toolExecutionStatus = status,
+                        streamingContent = "",
+                        streamingReasoning = ""
+                    )
+                },
+                onAskUser = { question, options ->
+                    val deferred = CompletableDeferred<String>()
+                    _uiState.value = _uiState.value.copy(
+                        askUserDialog = AskUserDialogState(question, options, deferred)
+                    )
+                    deferred
+                }
+            )
+            result.fold(
+                onSuccess = {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        streamingContent = "",
+                        streamingReasoning = "",
+                        toolExecutionStatus = null
+                    )
+                },
+                onFailure = { e ->
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        streamingContent = "",
+                        streamingReasoning = "",
+                        toolExecutionStatus = null,
+                        error = e.message ?: "An error occurred"
+                    )
+                }
+            )
+        }
+    }
+
+    fun editMessage(messageId: Long) {
+        val msg = _uiState.value.messages.find { it.id == messageId } ?: return
+        _uiState.value = _uiState.value.copy(
+            editingMessageId = messageId,
+            editingText = msg.content
+        )
+    }
+
+    fun updateEditText(text: String) {
+        _uiState.value = _uiState.value.copy(editingText = text)
+    }
+
+    fun cancelEdit() {
+        _uiState.value = _uiState.value.copy(editingMessageId = null, editingText = "")
+    }
+
+    fun submitEdit() {
+        val messageId = _uiState.value.editingMessageId ?: return
+        val newContent = _uiState.value.editingText.trim()
+        if (newContent.isEmpty()) return
+
+        _uiState.value = _uiState.value.copy(
+            editingMessageId = null,
+            editingText = "",
+            isLoading = true,
+            error = null,
+            streamingContent = "",
+            streamingReasoning = ""
+        )
+
+        viewModelScope.launch {
+            val result = chatRepository.editAndResend(
+                conversationId = conversationId,
+                originalMessageId = messageId,
+                newContent = newContent,
+                onStreamUpdate = { content, reasoning ->
+                    _uiState.value = _uiState.value.copy(
+                        streamingContent = content,
+                        streamingReasoning = reasoning
+                    )
+                },
+                onToolStatus = { status ->
+                    _uiState.value = _uiState.value.copy(
+                        toolExecutionStatus = status,
+                        streamingContent = "",
+                        streamingReasoning = ""
+                    )
+                },
+                onAskUser = { question, options ->
+                    val deferred = CompletableDeferred<String>()
+                    _uiState.value = _uiState.value.copy(
+                        askUserDialog = AskUserDialogState(question, options, deferred)
+                    )
+                    deferred
+                }
+            )
+            result.fold(
+                onSuccess = {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        streamingContent = "",
+                        streamingReasoning = "",
+                        toolExecutionStatus = null
+                    )
+                },
+                onFailure = { e ->
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        streamingContent = "",
+                        streamingReasoning = "",
+                        toolExecutionStatus = null,
+                        error = e.message ?: "An error occurred"
+                    )
+                }
+            )
+        }
+    }
+
+    fun switchBranch(targetMessageId: Long) {
+        viewModelScope.launch {
+            chatRepository.switchBranch(conversationId, targetMessageId)
+        }
     }
 
     class Factory(

@@ -15,7 +15,7 @@ import androidx.room.PrimaryKey
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("conversationId")]
+    indices = [Index("conversationId"), Index("parentMessageId")]
 )
 data class MessageEntity(
     @PrimaryKey(autoGenerate = true)
@@ -34,5 +34,8 @@ data class MessageEntity(
     val isExcluded: Boolean = false,
     val translatedText: String? = null,
     val toolCallsJson: String? = null,
-    val toolCallId: String? = null
+    val toolCallId: String? = null,
+    val parentMessageId: Long? = null,
+    val siblingIndex: Int = 0,
+    val activeChildId: Long? = null
 )
