@@ -137,7 +137,7 @@ class ChatViewModel(
 
     fun setAttachment(attachment: ProcessedAttachment) {
         val warning = if (attachment is ProcessedAttachment.TextAttachment && attachment.wasTruncated) {
-            "ファイルが30KBを超えています。先頭部分のみ送信します。"
+            "ファイルが28KBを超えています。先頭部分のみ送信します。"
         } else null
         _uiState.value = _uiState.value.copy(attachment = attachment, attachmentWarning = warning)
     }
