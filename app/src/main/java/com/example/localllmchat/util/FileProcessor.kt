@@ -24,7 +24,7 @@ sealed class ProcessedAttachment {
 }
 
 object FileProcessor {
-    private const val MAX_TEXT_BYTES = 35 * 1024 // 35KB
+    private const val MAX_TEXT_BYTES = 30 * 1024 // 30KB
     private const val MAX_IMAGE_DIMENSION = 1024
 
     fun processFile(
