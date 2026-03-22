@@ -31,6 +31,7 @@ data class MessageEntity(
     val prefillSpeedTps: Double? = null,
     val summaryText: String? = null,
     val isSummarized: Boolean = false,
+    val summarizeConfigJson: String? = null,
     val isExcluded: Boolean = false,
     val translatedText: String? = null,
     val toolCallsJson: String? = null,

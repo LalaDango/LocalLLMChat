@@ -21,6 +21,8 @@ import com.example.localllmchat.data.remote.ToolDefinition
 import com.example.localllmchat.data.remote.UsageResponse
 import com.example.localllmchat.data.tool.ToolRegistry
 import com.example.localllmchat.util.ProcessedAttachment
+import com.example.localllmchat.data.model.LengthPreset
+import com.example.localllmchat.data.model.SummarizeConfig
 import com.example.localllmchat.data.remote.ChatMessage
 import com.example.localllmchat.data.remote.ChatRequest
 import android.util.Log
@@ -128,22 +130,25 @@ class ChatRepository(
     suspend fun sendMessage(
         conversationId: Long,
         userMessage: String,
-        attachment: ProcessedAttachment? = null,
+        textAttachment: ProcessedAttachment.TextAttachment? = null,
+        imageAttachments: List<ProcessedAttachment.ImageAttachment> = emptyList(),
         onStreamUpdate: ((content: String, reasoning: String) -> Unit)? = null,
         onToolStatus: ((status: String?) -> Unit)? = null,
         onAskUser: ((question: String, options: List<String>) -> CompletableDeferred<String>)? = null
     ): Result<String> {
         return try {
             // Build DB content based on attachment type
-            val dbContent = when (attachment) {
-                is ProcessedAttachment.TextAttachment -> {
-                    val doc = "<documents>\n<document filename=\"${attachment.fileName}\" type=\"${attachment.mimeType}\">\n${attachment.content}\n</document>\n</documents>"
-                    if (userMessage.isNotBlank()) "$doc\n\n$userMessage" else doc
+            val dbContent = buildString {
+                if (textAttachment != null) {
+                    append("<documents>\n<document filename=\"${textAttachment.fileName}\" type=\"${textAttachment.mimeType}\">\n${textAttachment.content}\n</document>\n</documents>")
+                    if (userMessage.isNotBlank()) append("\n\n")
                 }
-                is ProcessedAttachment.ImageAttachment -> {
-                    "$userMessage\n\n[画像添付: ${attachment.fileName}]"
+                if (userMessage.isNotBlank()) append(userMessage)
+                if (imageAttachments.isNotEmpty()) {
+                    if (isNotEmpty()) append("\n\n")
+                    val names = imageAttachments.joinToString(", ") { it.fileName }
+                    append("[画像添付: $names]")
                 }
-                null -> userMessage
             }
 
             // Determine parent: last message in the current active path
@@ -155,7 +160,7 @@ class ChatRepository(
             generateResponse(
                 conversationId = conversationId,
                 parentMessageId = userMsgId,
-                attachment = attachment,
+                imageAttachments = imageAttachments,
                 userMessage = userMessage,
                 onStreamUpdate = onStreamUpdate,
                 onToolStatus = onToolStatus,
@@ -171,7 +176,7 @@ class ChatRepository(
         conversationId: Long,
         parentMessageId: Long,
         siblingIndex: Int = 0,
-        attachment: ProcessedAttachment? = null,
+        imageAttachments: List<ProcessedAttachment.ImageAttachment> = emptyList(),
         userMessage: String = "",
         onStreamUpdate: ((content: String, reasoning: String) -> Unit)? = null,
         onToolStatus: ((status: String?) -> Unit)? = null,
@@ -186,7 +191,7 @@ class ChatRepository(
         val api = ApiClient.getChatApi(baseUrl)
 
         val toolsEnabled = toolDefinitions != null
-        val step1Messages = buildApiMessages(conversationId, attachment, userMessage, systemPrompt, toolsEnabled, upToMessageId = parentMessageId)
+        val step1Messages = buildApiMessages(conversationId, imageAttachments, userMessage, systemPrompt, toolsEnabled, upToMessageId = parentMessageId)
         val step1Request = ApiChatRequest(
             model = modelName,
             messages = step1Messages,
@@ -247,7 +252,7 @@ class ChatRepository(
 
             onToolStatus?.invoke(null)
 
-            val step3Messages = buildApiMessages(conversationId, null, "", systemPrompt)
+            val step3Messages = buildApiMessages(conversationId, emptyList(), "", systemPrompt)
             val step3Request = ApiChatRequest(
                 model = modelName,
                 messages = step3Messages,
@@ -615,7 +620,7 @@ class ChatRepository(
 
     private suspend fun buildApiMessages(
         conversationId: Long,
-        attachment: ProcessedAttachment?,
+        imageAttachments: List<ProcessedAttachment.ImageAttachment>,
         userMessage: String,
         systemPrompt: String,
         toolsEnabled: Boolean = true,
@@ -666,17 +671,19 @@ class ChatRepository(
                         .trim()
                     ApiChatMessage(role = msg.role, content = MessageContent.Text(content))
                 }
-                // Last user message with image attachment
-                isLastUserMessage && attachment is ProcessedAttachment.ImageAttachment -> {
+                // Last user message with image attachments
+                isLastUserMessage && imageAttachments.isNotEmpty() -> {
                     val parts = mutableListOf<ContentPart>()
-                    if (userMessage.isNotBlank()) {
-                        parts.add(ContentPart.TextPart(userMessage))
+                    val sourceText = if (msg.isSummarized && msg.summaryText != null) msg.summaryText else msg.content
+                    val cleanedText = sourceText.replace(Regex("\\n\\n\\[画像添付: [^\\]]+\\]$"), "")
+                    if (cleanedText.isNotBlank()) {
+                        parts.add(ContentPart.TextPart(cleanedText))
                     }
-                    parts.add(
-                        ContentPart.ImageUrlPart(
-                            ImageUrl("data:${attachment.mimeType};base64,${attachment.base64Data}")
-                        )
-                    )
+                    imageAttachments.forEach { img ->
+                        parts.add(ContentPart.ImageUrlPart(
+                            ImageUrl("data:${img.mimeType};base64,${img.base64Data}")
+                        ))
+                    }
                     ApiChatMessage(role = msg.role, content = MessageContent.Parts(parts))
                 }
                 // Normal user message
@@ -726,16 +733,17 @@ class ChatRepository(
     data class SummarizeResult(
         val summaryText: String,
         val originalTokens: Int,
-        val summaryTokens: Int
+        val summaryTokens: Int,
+        val config: SummarizeConfig
     )
 
-    suspend fun summarizeMessage(messageId: Long, content: String): Result<SummarizeResult> {
+    suspend fun generateSummary(content: String, config: SummarizeConfig): Result<SummarizeResult> {
         return try {
             val baseUrl = settingsRepository.baseUrl.first()
             val modelName = settingsRepository.modelName.first()
             val api = ApiClient.getChatApi(baseUrl)
 
-            val systemPrompt = "以下のテキストを日本語で100〜200トークン程度に要約してください。重要な情報や結論を保持しつつ、トークン数を削減してください。要約文のみ返してください。"
+            val systemPrompt = buildSummarizePrompt(config)
             val request = ChatRequest(
                 model = modelName,
                 messages = listOf(
@@ -743,7 +751,7 @@ class ChatRepository(
                     ChatMessage(role = "user", content = content)
                 ),
                 stream = false,
-                maxTokens = 512
+                maxTokens = config.lengthPreset.maxTokens
             )
 
             val response = withTimeout(180_000) {
@@ -753,7 +761,6 @@ class ChatRepository(
             }
 
             val rawText = response.choices.firstOrNull()?.message?.content ?: ""
-            // Remove <think>...</think> tags if present
             val cleanedText = rawText
                 .replace(Regex("<think>[\\s\\S]*?</think>"), "")
                 .replace(Regex("^[\\s\\S]*?</think>"), "")
@@ -767,10 +774,39 @@ class ChatRepository(
             val originalTokens = ((usage?.promptTokens ?: 0) - 50).coerceAtLeast(0)
             val summaryTokens = usage?.completionTokens ?: 0
 
-            messageDao.updateSummary(messageId, cleanedText)
-            Result.success(SummarizeResult(cleanedText, originalTokens, summaryTokens))
+            val resultConfig = config.copy(
+                originalTokens = originalTokens,
+                summaryTokens = summaryTokens
+            )
+            Result.success(SummarizeResult(cleanedText, originalTokens, summaryTokens, resultConfig))
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    suspend fun saveSummary(messageId: Long, summaryText: String, config: SummarizeConfig) {
+        val configJson = Gson().toJson(config)
+        messageDao.updateSummaryWithConfig(messageId, summaryText, configJson)
+    }
+
+    private fun buildSummarizePrompt(config: SummarizeConfig): String {
+        return buildString {
+            append("以下のテキストを日本語で要約してください。")
+            append("出力は必ず${config.lengthPreset.minTokens}トークン以上、")
+            append("${config.lengthPreset.targetRange}トークン程度の長さを目安にしてください。")
+            append("短すぎる要約は禁止です。")
+            append("重要な情報、具体的な数値、固有名詞、制約条件をできるだけ保持してください。")
+            append("情報を省略しすぎず、内容が薄くならないようにしてください。")
+            if (config.lengthPreset == LengthPreset.DETAILED) {
+                append("概要・主要な特徴・制約・利用方法の4要素を必ず含めてください。")
+            }
+            if (config.priorityTopics.isNotBlank()) {
+                append("特に「${config.priorityTopics}」に関する情報を優先的に残してください。")
+            }
+            if (config.excludeTopics.isNotBlank()) {
+                append("「${config.excludeTopics}」に関する内容は省略して構いません。")
+            }
+            append("余計な補足やアドバイスは含めず、要約文のみ返してください。")
         }
     }
 

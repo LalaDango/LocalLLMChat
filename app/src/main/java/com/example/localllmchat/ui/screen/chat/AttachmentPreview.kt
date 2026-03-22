@@ -4,12 +4,16 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -30,14 +34,43 @@ import androidx.compose.ui.unit.dp
 import com.example.localllmchat.util.ProcessedAttachment
 
 @Composable
-fun AttachmentPreview(
+fun AttachmentPreviewBar(
+    textAttachment: ProcessedAttachment.TextAttachment?,
+    imageAttachments: List<ProcessedAttachment.ImageAttachment>,
+    onRemoveTextAttachment: () -> Unit,
+    onRemoveImageAttachment: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    LazyRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (textAttachment != null) {
+            item {
+                AttachmentPreviewItem(
+                    attachment = textAttachment,
+                    onRemove = onRemoveTextAttachment
+                )
+            }
+        }
+        itemsIndexed(imageAttachments) { index, img ->
+            AttachmentPreviewItem(
+                attachment = img,
+                onRemove = { onRemoveImageAttachment(index) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun AttachmentPreviewItem(
     attachment: ProcessedAttachment,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier
-            .fillMaxWidth()
+            .widthIn(min = 120.dp, max = 200.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(8.dp),

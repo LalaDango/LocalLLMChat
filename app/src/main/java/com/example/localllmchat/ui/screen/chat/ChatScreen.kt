@@ -143,7 +143,7 @@ fun ChatScreen(
                 val processed = FileProcessor.processFile(
                     context.contentResolver, it, fileName, mimeType
                 )
-                viewModel.setAttachment(processed)
+                viewModel.addAttachment(processed)
             } catch (e: Exception) {
                 scope.launch {
                     snackbarHostState.showSnackbar(
@@ -176,6 +176,17 @@ fun ChatScreen(
             state = dialogState,
             onAnswer = viewModel::answerAskUserQuestion,
             onCancel = viewModel::cancelAskUserQuestion
+        )
+    }
+
+    if (uiState.showSummarizeDialog) {
+        SummarizeConfigDialog(
+            initialConfig = uiState.summarizeInitialConfig,
+            preview = uiState.summarizePreview,
+            isLoading = uiState.isSummarizePreviewLoading,
+            onGenerate = { config -> viewModel.generateSummarizePreview(config) },
+            onConfirm = { viewModel.confirmSummarizePreview() },
+            onDismiss = { viewModel.closeSummarizeDialog() }
         )
     }
 
@@ -356,7 +367,7 @@ fun ChatScreen(
                     } else {
                     MessageBubble(
                         message = message,
-                        isSummarizing = uiState.summarizingMessageId == message.id,
+                        isSummarizing = false,
                         isTranslating = uiState.translatingMessageId == message.id,
                         onCopyMessage = { content ->
                             copyToClipboard(context, content)
@@ -365,7 +376,11 @@ fun ChatScreen(
                             selectedMessageForInfo = message
                         },
                         onSummarize = {
-                            viewModel.summarizeMessage(message.id, message.content)
+                            if (message.isSummarized) {
+                                viewModel.openResummarizeDialog(message.id, message.content, message.summarizeConfigJson)
+                            } else {
+                                viewModel.openSummarizeDialog(message.id, message.content)
+                            }
                         },
                         onShowOriginal = {
                             showOriginalTextFor = message
@@ -453,8 +468,10 @@ fun ChatScreen(
                     )
                 },
                 isLoading = uiState.isLoading,
-                attachment = uiState.attachment,
-                onRemoveAttachment = viewModel::clearAttachment,
+                textAttachment = uiState.textAttachment,
+                imageAttachments = uiState.imageAttachments,
+                onRemoveTextAttachment = viewModel::removeTextAttachment,
+                onRemoveImageAttachment = viewModel::removeImageAttachment,
                 availableTools = uiState.availableTools,
                 toolDescriptions = uiState.toolDescriptions,
                 disabledTools = uiState.disabledTools,
@@ -858,8 +875,24 @@ private fun MessageBubble(
                             }
                         )
                     }
+                    // Summarize button (opens dialog for both new and re-summarize)
+                    IconButton(
+                        onClick = onSummarize,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Summarize,
+                            contentDescription = if (message.isSummarized) "Re-summarize" else "Summarize",
+                            modifier = Modifier.size(18.dp),
+                            tint = if (message.isSummarized) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                            } else {
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            }
+                        )
+                    }
+                    // Show Original button (only for summarized messages)
                     if (message.isSummarized) {
-                        // Show "Show Original" button for summarized messages
                         IconButton(
                             onClick = onShowOriginal,
                             modifier = Modifier.size(32.dp)
@@ -870,26 +903,6 @@ private fun MessageBubble(
                                 modifier = Modifier.size(18.dp),
                                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                             )
-                        }
-                    } else {
-                        // Show "Summarize" button for non-summarized messages
-                        if (isSummarizing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            IconButton(
-                                onClick = onSummarize,
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Summarize,
-                                    contentDescription = "Summarize",
-                                    modifier = Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                                )
-                            }
                         }
                     }
                     CopyButton(onClick = { onCopyMessage(plainTextContent) })
@@ -1073,8 +1086,10 @@ private fun ChatInput(
     onSend: () -> Unit,
     onAttachClick: () -> Unit,
     isLoading: Boolean,
-    attachment: ProcessedAttachment?,
-    onRemoveAttachment: () -> Unit,
+    textAttachment: ProcessedAttachment.TextAttachment?,
+    imageAttachments: List<ProcessedAttachment.ImageAttachment>,
+    onRemoveTextAttachment: () -> Unit,
+    onRemoveImageAttachment: (Int) -> Unit,
     availableTools: List<String> = emptyList(),
     toolDescriptions: Map<String, String> = emptyMap(),
     disabledTools: Set<String> = emptySet(),
@@ -1082,7 +1097,7 @@ private fun ChatInput(
     onToggleTool: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val canSend = (text.isNotBlank() || attachment != null) && !isLoading
+    val canSend = (text.isNotBlank() || textAttachment != null || imageAttachments.isNotEmpty()) && !isLoading
     var showToolMenu by remember { mutableStateOf(false) }
     val showToolButton = modelSupportsTools && availableTools.isNotEmpty()
     val allToolsEnabled = availableTools.none { it in disabledTools }
@@ -1093,10 +1108,12 @@ private fun ChatInput(
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
     ) {
-        if (attachment != null) {
-            AttachmentPreview(
-                attachment = attachment,
-                onRemove = onRemoveAttachment,
+        if (textAttachment != null || imageAttachments.isNotEmpty()) {
+            AttachmentPreviewBar(
+                textAttachment = textAttachment,
+                imageAttachments = imageAttachments,
+                onRemoveTextAttachment = onRemoveTextAttachment,
+                onRemoveImageAttachment = onRemoveImageAttachment,
                 modifier = Modifier.padding(bottom = 4.dp)
             )
         }

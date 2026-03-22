@@ -5,9 +5,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.localllmchat.data.local.ConversationEntity
 import com.example.localllmchat.data.local.MessageEntity
+import com.example.localllmchat.data.model.SummarizeConfig
 import com.example.localllmchat.data.repository.ChatRepository
 import com.example.localllmchat.data.repository.SettingsRepository
 import com.example.localllmchat.util.ProcessedAttachment
+import com.google.gson.Gson
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,11 +31,17 @@ data class ChatUiState(
     val sessionTokenCount: Int = 0,
     val conversationTotalTokens: Int = 0, // cumulative tokens across all turns in this chat
     val contextWindowSize: Int = SettingsRepository.DEFAULT_CONTEXT_WINDOW_SIZE,
-    val attachment: ProcessedAttachment? = null,
+    val textAttachment: ProcessedAttachment.TextAttachment? = null,
+    val imageAttachments: List<ProcessedAttachment.ImageAttachment> = emptyList(),
     val attachmentWarning: String? = null,
     val streamingContent: String = "",
     val streamingReasoning: String = "",
-    val summarizingMessageId: Long? = null,
+    val showSummarizeDialog: Boolean = false,
+    val summarizeTargetMessageId: Long? = null,
+    val summarizeTargetContent: String? = null,
+    val summarizePreview: ChatRepository.SummarizeResult? = null,
+    val isSummarizePreviewLoading: Boolean = false,
+    val summarizeInitialConfig: SummarizeConfig? = null,
     val summarizeToast: String? = null,
     val translatingMessageId: Long? = null,
     val toolExecutionStatus: String? = null,
@@ -124,10 +132,21 @@ class ChatViewModel(
         val lastAssistantMessage = activeMessages.lastOrNull { it.role == "assistant" }
         val lastTurnTokens = lastAssistantMessage?.totalTokens ?: 0
         // Sum total_tokens from all non-excluded assistant messages for cumulative count
-        val cumulativeTokens = activeMessages.filter { it.role == "assistant" }.sumOf { it.totalTokens ?: 0 }
+        var cumulativeTokens = activeMessages.filter { it.role == "assistant" }.sumOf { it.totalTokens ?: 0 }
+        // Subtract token reductions from summarized messages
+        activeMessages.filter { it.isSummarized && it.summarizeConfigJson != null }.forEach { msg ->
+            try {
+                val config = Gson().fromJson(msg.summarizeConfigJson, SummarizeConfig::class.java)
+                val orig = config.originalTokens
+                val summary = config.summaryTokens
+                if (orig != null && summary != null) {
+                    cumulativeTokens -= (orig - summary)
+                }
+            } catch (_: Exception) { }
+        }
         _uiState.value = _uiState.value.copy(
             sessionTokenCount = lastTurnTokens,
-            conversationTotalTokens = cumulativeTokens
+            conversationTotalTokens = cumulativeTokens.coerceAtLeast(0)
         )
     }
 
@@ -135,25 +154,57 @@ class ChatViewModel(
         _uiState.value = _uiState.value.copy(inputText = text)
     }
 
-    fun setAttachment(attachment: ProcessedAttachment) {
-        val warning = if (attachment is ProcessedAttachment.TextAttachment && attachment.wasTruncated) {
-            "ファイルが28KBを超えています。先頭部分のみ送信します。"
-        } else null
-        _uiState.value = _uiState.value.copy(attachment = attachment, attachmentWarning = warning)
+    fun addAttachment(attachment: ProcessedAttachment) {
+        when (attachment) {
+            is ProcessedAttachment.TextAttachment -> {
+                val warning = if (attachment.wasTruncated)
+                    "ファイルが28KBを超えています。先頭部分のみ送信します。" else null
+                _uiState.value = _uiState.value.copy(
+                    textAttachment = attachment, attachmentWarning = warning
+                )
+            }
+            is ProcessedAttachment.ImageAttachment -> {
+                val current = _uiState.value.imageAttachments
+                if (current.size >= 5) {
+                    _uiState.value = _uiState.value.copy(
+                        attachmentWarning = "画像は最大5枚までです"
+                    )
+                    return
+                }
+                _uiState.value = _uiState.value.copy(
+                    imageAttachments = current + attachment,
+                    attachmentWarning = null
+                )
+            }
+        }
     }
 
-    fun clearAttachment() {
-        _uiState.value = _uiState.value.copy(attachment = null, attachmentWarning = null)
+    fun clearAllAttachments() {
+        _uiState.value = _uiState.value.copy(
+            textAttachment = null, imageAttachments = emptyList(), attachmentWarning = null
+        )
+    }
+
+    fun removeTextAttachment() {
+        _uiState.value = _uiState.value.copy(textAttachment = null)
+    }
+
+    fun removeImageAttachment(index: Int) {
+        val current = _uiState.value.imageAttachments.toMutableList()
+        if (index in current.indices) current.removeAt(index)
+        _uiState.value = _uiState.value.copy(imageAttachments = current)
     }
 
     fun sendMessage() {
         val message = _uiState.value.inputText.trim()
-        val attachment = _uiState.value.attachment
-        if (message.isEmpty() && attachment == null) return
+        val textAttachment = _uiState.value.textAttachment
+        val imageAttachments = _uiState.value.imageAttachments
+        if (message.isEmpty() && textAttachment == null && imageAttachments.isEmpty()) return
 
         _uiState.value = _uiState.value.copy(
             inputText = "",
-            attachment = null,
+            textAttachment = null,
+            imageAttachments = emptyList(),
             attachmentWarning = null,
             isLoading = true,
             error = null,
@@ -165,7 +216,8 @@ class ChatViewModel(
             val result = chatRepository.sendMessage(
                 conversationId = conversationId,
                 userMessage = message,
-                attachment = attachment,
+                textAttachment = textAttachment,
+                imageAttachments = imageAttachments,
                 onStreamUpdate = { content, reasoning ->
                     _uiState.value = _uiState.value.copy(
                         streamingContent = content,
@@ -212,31 +264,83 @@ class ChatViewModel(
         }
     }
 
-    fun summarizeMessage(messageId: Long, content: String) {
-        if (_uiState.value.summarizingMessageId != null) return
-        _uiState.value = _uiState.value.copy(summarizingMessageId = messageId)
+    fun openSummarizeDialog(messageId: Long, content: String) {
+        _uiState.value = _uiState.value.copy(
+            showSummarizeDialog = true,
+            summarizeTargetMessageId = messageId,
+            summarizeTargetContent = content,
+            summarizePreview = null,
+            isSummarizePreviewLoading = false,
+            summarizeInitialConfig = null
+        )
+    }
+
+    fun openResummarizeDialog(messageId: Long, content: String, configJson: String?) {
+        val prevConfig = configJson?.let {
+            try { Gson().fromJson(it, SummarizeConfig::class.java) } catch (_: Exception) { null }
+        }
+        _uiState.value = _uiState.value.copy(
+            showSummarizeDialog = true,
+            summarizeTargetMessageId = messageId,
+            summarizeTargetContent = content,
+            summarizePreview = null,
+            isSummarizePreviewLoading = false,
+            summarizeInitialConfig = prevConfig
+        )
+    }
+
+    fun closeSummarizeDialog() {
+        _uiState.value = _uiState.value.copy(
+            showSummarizeDialog = false,
+            summarizeTargetMessageId = null,
+            summarizeTargetContent = null,
+            summarizePreview = null,
+            isSummarizePreviewLoading = false,
+            summarizeInitialConfig = null
+        )
+    }
+
+    fun generateSummarizePreview(config: SummarizeConfig) {
+        val content = _uiState.value.summarizeTargetContent ?: return
+        if (_uiState.value.isSummarizePreviewLoading) return
+
+        _uiState.value = _uiState.value.copy(
+            isSummarizePreviewLoading = true,
+            summarizePreview = null
+        )
+
         viewModelScope.launch {
-            val result = chatRepository.summarizeMessage(messageId, content)
+            val result = chatRepository.generateSummary(content, config)
             result.fold(
-                onSuccess = { summarizeResult ->
-                    val reduced = summarizeResult.originalTokens - summarizeResult.summaryTokens
-                    val newTotal = (_uiState.value.conversationTotalTokens - reduced).coerceAtLeast(0)
-                    val newSession = (_uiState.value.sessionTokenCount - reduced).coerceAtLeast(0)
-                    val toast = "要約完了！ ${summarizeResult.originalTokens} → ${summarizeResult.summaryTokens} トークン"
+                onSuccess = { preview ->
                     _uiState.value = _uiState.value.copy(
-                        summarizingMessageId = null,
-                        conversationTotalTokens = newTotal,
-                        sessionTokenCount = newSession,
-                        summarizeToast = toast
+                        isSummarizePreviewLoading = false,
+                        summarizePreview = preview
                     )
                 },
                 onFailure = { e ->
                     _uiState.value = _uiState.value.copy(
-                        summarizingMessageId = null,
-                        error = "要約に失敗しました: ${e.message}"
+                        isSummarizePreviewLoading = false,
+                        error = "要約プレビューに失敗しました: ${e.message}"
                     )
                 }
             )
+        }
+    }
+
+    fun confirmSummarizePreview() {
+        val messageId = _uiState.value.summarizeTargetMessageId ?: return
+        val preview = _uiState.value.summarizePreview ?: return
+
+        viewModelScope.launch {
+            chatRepository.saveSummary(messageId, preview.summaryText, preview.config)
+
+            val toast = "要約完了！ ${preview.originalTokens} → ${preview.summaryTokens} トークン"
+            _uiState.value = _uiState.value.copy(
+                summarizeToast = toast
+            )
+            closeSummarizeDialog()
+            // Token counts will be recalculated via updateSessionTokenCount when Room Flow emits
         }
     }
 
