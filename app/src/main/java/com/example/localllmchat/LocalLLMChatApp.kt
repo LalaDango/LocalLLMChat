@@ -3,6 +3,7 @@ package com.example.localllmchat
 import android.app.Application
 import com.example.localllmchat.data.local.AppDatabase
 import com.example.localllmchat.data.repository.ChatRepository
+import com.example.localllmchat.data.repository.PresetRepository
 import com.example.localllmchat.data.repository.SettingsRepository
 import com.example.localllmchat.data.tool.AskUserQuestionTool
 import com.example.localllmchat.data.tool.DateTimeTool
@@ -19,6 +20,9 @@ class LocalLLMChatApp : Application() {
     lateinit var chatRepository: ChatRepository
         private set
 
+    lateinit var presetRepository: PresetRepository
+        private set
+
     lateinit var toolRegistry: ToolRegistry
         private set
 
@@ -27,6 +31,7 @@ class LocalLLMChatApp : Application() {
 
         database = AppDatabase.getInstance(this)
         settingsRepository = SettingsRepository(this)
+        presetRepository = PresetRepository(database.presetDao())
         toolRegistry = ToolRegistry().apply {
             register("get_datetime", DateTimeTool())
             register("ask_user_question", AskUserQuestionTool())

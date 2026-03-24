@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.localllmchat.data.local.ConversationEntity
+import com.example.localllmchat.data.local.PresetEntity
 import com.example.localllmchat.data.repository.ChatRepository
+import com.example.localllmchat.data.repository.PresetRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,11 +14,13 @@ import kotlinx.coroutines.launch
 
 data class ConversationListUiState(
     val conversations: List<ConversationEntity> = emptyList(),
+    val presets: List<PresetEntity> = emptyList(),
     val isLoading: Boolean = true
 )
 
 class ConversationListViewModel(
-    private val chatRepository: ChatRepository
+    private val chatRepository: ChatRepository,
+    private val presetRepository: PresetRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ConversationListUiState())
@@ -24,6 +28,7 @@ class ConversationListViewModel(
 
     init {
         loadConversations()
+        loadPresets()
     }
 
     private fun loadConversations() {
@@ -37,9 +42,28 @@ class ConversationListViewModel(
         }
     }
 
+    private fun loadPresets() {
+        viewModelScope.launch {
+            presetRepository.getAllPresets().collect { presets ->
+                _uiState.value = _uiState.value.copy(presets = presets)
+            }
+        }
+    }
+
     fun createNewConversation(onCreated: (Long) -> Unit) {
         viewModelScope.launch {
             val conversationId = chatRepository.createConversation("New Chat")
+            onCreated(conversationId)
+        }
+    }
+
+    fun createConversationFromPreset(preset: PresetEntity, onCreated: (Long) -> Unit) {
+        viewModelScope.launch {
+            presetRepository.updateLastUsedAt(preset.id)
+            val conversationId = chatRepository.createConversationWithPreset(
+                title = "${preset.emoji} New Chat",
+                preset = preset
+            )
             onCreated(conversationId)
         }
     }
@@ -50,10 +74,13 @@ class ConversationListViewModel(
         }
     }
 
-    class Factory(private val chatRepository: ChatRepository) : ViewModelProvider.Factory {
+    class Factory(
+        private val chatRepository: ChatRepository,
+        private val presetRepository: PresetRepository
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return ConversationListViewModel(chatRepository) as T
+            return ConversationListViewModel(chatRepository, presetRepository) as T
         }
     }
 }

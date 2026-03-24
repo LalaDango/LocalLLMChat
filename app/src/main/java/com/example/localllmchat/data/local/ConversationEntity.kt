@@ -10,5 +10,9 @@ data class ConversationEntity(
     val title: String,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
-    val activeRootMessageId: Long? = null
+    val activeRootMessageId: Long? = null,
+    val presetId: Long? = null,
+    val presetEmoji: String? = null,
+    val presetName: String? = null,
+    val systemPrompt: String? = null
 )

@@ -8,13 +8,14 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [ConversationEntity::class, MessageEntity::class],
-    version = 8,
+    entities = [ConversationEntity::class, MessageEntity::class, PresetEntity::class],
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
+    abstract fun presetDao(): PresetDao
 
     companion object {
         @Volatile
@@ -72,6 +73,26 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS presets (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        emoji TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        systemPrompt TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL DEFAULT 0,
+                        lastUsedAt INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+                database.execSQL("ALTER TABLE conversations ADD COLUMN presetId INTEGER DEFAULT NULL")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN presetEmoji TEXT DEFAULT NULL")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN presetName TEXT DEFAULT NULL")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN systemPrompt TEXT DEFAULT NULL")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -79,7 +100,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "localllmchat.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                     .build()
                 INSTANCE = instance
                 instance

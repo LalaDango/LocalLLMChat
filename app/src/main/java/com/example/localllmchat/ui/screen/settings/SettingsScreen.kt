@@ -12,6 +12,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -52,6 +53,7 @@ private val PRESET_MODELS = listOf(
 fun SettingsScreen(
     settingsRepository: SettingsRepository,
     onBack: () -> Unit,
+    onNavigateToPresetList: () -> Unit = {},
     viewModel: SettingsViewModel = viewModel(
         factory = SettingsViewModel.Factory(settingsRepository)
     )
@@ -154,12 +156,28 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = uiState.systemPrompt,
                 onValueChange = { viewModel.updateSystemPrompt(it) },
-                label = { Text("System Prompt") },
+                label = { Text("デフォルト System Prompt") },
                 placeholder = { Text("モデルの振る舞いを指示するプロンプト（省略可）") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = false,
                 minLines = 4
             )
+
+            Text(
+                text = "プリセット未指定のチャットに適用されます",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedButton(
+                onClick = onNavigateToPresetList,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("プリセット管理")
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 

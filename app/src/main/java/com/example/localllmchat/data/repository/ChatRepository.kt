@@ -2,6 +2,7 @@ package com.example.localllmchat.data.repository
 
 import com.example.localllmchat.data.local.ConversationDao
 import com.example.localllmchat.data.local.ConversationEntity
+import com.example.localllmchat.data.local.PresetEntity
 import com.example.localllmchat.data.local.MessageDao
 import com.example.localllmchat.data.local.MessageEntity
 import com.example.localllmchat.data.remote.AccumulatedToolCall
@@ -63,6 +64,23 @@ class ChatRepository(
     suspend fun createConversation(title: String): Long {
         val conversation = ConversationEntity(title = title)
         return conversationDao.insert(conversation)
+    }
+
+    suspend fun createConversationWithPreset(title: String, preset: PresetEntity): Long {
+        val conversation = ConversationEntity(
+            title = title,
+            presetId = preset.id,
+            presetEmoji = preset.emoji,
+            presetName = preset.name,
+            systemPrompt = preset.systemPrompt
+        )
+        return conversationDao.insert(conversation)
+    }
+
+    private suspend fun resolveSystemPrompt(conversationId: Long): String {
+        val conversation = conversationDao.getConversationById(conversationId)
+        return conversation?.systemPrompt
+            ?: settingsRepository.systemPrompt.first()
     }
 
     suspend fun updateConversationTitle(id: Long, title: String) {
@@ -184,7 +202,7 @@ class ChatRepository(
     ): Result<String> {
         val baseUrl = settingsRepository.baseUrl.first()
         val modelName = settingsRepository.modelName.first()
-        val systemPrompt = settingsRepository.systemPrompt.first()
+        val systemPrompt = resolveSystemPrompt(conversationId)
         val disabledTools = settingsRepository.disabledTools.first()
         val toolDefinitions = toolRegistry.getDefinitions(modelName, disabledTools)
 
