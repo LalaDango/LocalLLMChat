@@ -156,7 +156,7 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = uiState.systemPrompt,
                 onValueChange = { viewModel.updateSystemPrompt(it) },
-                label = { Text("デフォルト System Prompt") },
+                label = { Text("システムプロンプト") },
                 placeholder = { Text("モデルの振る舞いを指示するプロンプト（省略可）") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = false,
