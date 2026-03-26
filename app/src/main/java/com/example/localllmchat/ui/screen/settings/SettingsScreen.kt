@@ -42,7 +42,6 @@ private val PRESET_MODELS = listOf(
     "lfm2.5-tk:1.2b",
     "qwen3.5:2b",
     "qwen3.5:4b",
-    "qwen3.5:9b",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
