@@ -23,8 +23,8 @@ class SettingsRepository(private val context: Context) {
         private val DISABLED_TOOLS_KEY = stringSetPreferencesKey("disabled_tools")
 
         const val DEFAULT_BASE_URL = "http://localhost:8080"
-        const val DEFAULT_MODEL_NAME = "lfm2.5-tk:1.2b"
-        const val DEFAULT_CONTEXT_WINDOW_SIZE = 32768
+        const val DEFAULT_MODEL_NAME = "qwen3.5:4b"
+        const val DEFAULT_CONTEXT_WINDOW_SIZE = 16384
         const val DEFAULT_SYSTEM_PROMPT = ""
     }
 
