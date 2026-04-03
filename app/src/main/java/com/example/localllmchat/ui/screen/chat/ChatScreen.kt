@@ -101,12 +101,6 @@ import com.example.localllmchat.data.repository.ChatRepository
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.example.localllmchat.data.repository.SettingsRepository
-import com.example.localllmchat.ui.theme.AssistantMessageBg
-import com.example.localllmchat.ui.theme.ThinkBlockBg
-import com.example.localllmchat.ui.theme.ThinkBlockText
-import com.example.localllmchat.ui.theme.SummarizedAssistantMessageBg
-import com.example.localllmchat.ui.theme.SummarizedUserMessageBg
-import com.example.localllmchat.ui.theme.UserMessageBg
 import com.example.localllmchat.util.FileProcessor
 import com.example.localllmchat.util.ProcessedAttachment
 import kotlinx.coroutines.launch
@@ -509,7 +503,7 @@ private fun StreamingMessageBubble(content: String) {
             modifier = Modifier
                 .widthIn(max = 340.dp)
                 .background(
-                    color = AssistantMessageBg,
+                    color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(
                         topStart = 16.dp,
                         topEnd = 16.dp,
@@ -519,7 +513,7 @@ private fun StreamingMessageBubble(content: String) {
                 )
         ) {
             val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
-            val thinkTextColor = ThinkBlockText.toArgb()
+            val thinkTextColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
 
             Column(modifier = Modifier.padding(12.dp)) {
                 parsedParts.forEach { part ->
@@ -537,10 +531,10 @@ private fun StreamingMessageBubble(content: String) {
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(ThinkBlockBg)
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                                     .border(
                                         width = 1.dp,
-                                        color = ThinkBlockText.copy(alpha = 0.3f),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                                         shape = RoundedCornerShape(8.dp)
                                     )
                                     .padding(8.dp)
@@ -549,7 +543,7 @@ private fun StreamingMessageBubble(content: String) {
                                     Text(
                                         text = "Thinking...",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = ThinkBlockText.copy(alpha = 0.7f)
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                     SelectableText(
@@ -711,9 +705,11 @@ private fun MessageBubble(
             message.totalTokens != null
 
     val bgColor = if (message.isSummarized) {
-        if (isUser) SummarizedUserMessageBg else SummarizedAssistantMessageBg
+        if (isUser) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
     } else {
-        if (isUser) UserMessageBg else AssistantMessageBg
+        if (isUser) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceVariant
     }
 
     Row(
@@ -736,7 +732,7 @@ private fun MessageBubble(
                 )
         ) {
             val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
-            val thinkTextColor = ThinkBlockText.toArgb()
+            val thinkTextColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
 
             Column(
                 modifier = Modifier.padding(12.dp)
@@ -756,10 +752,10 @@ private fun MessageBubble(
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(ThinkBlockBg)
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                                     .border(
                                         width = 1.dp,
-                                        color = ThinkBlockText.copy(alpha = 0.3f),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                                         shape = RoundedCornerShape(8.dp)
                                     )
                                     .padding(8.dp)
@@ -768,7 +764,7 @@ private fun MessageBubble(
                                     Text(
                                         text = "Thinking...",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = ThinkBlockText.copy(alpha = 0.7f)
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                     SelectableText(
@@ -986,7 +982,7 @@ private fun EditableMessageBubble(
             modifier = Modifier
                 .widthIn(max = 340.dp)
                 .background(
-                    color = UserMessageBg,
+                    color = MaterialTheme.colorScheme.primaryContainer,
                     shape = RoundedCornerShape(16.dp)
                 )
         ) {
