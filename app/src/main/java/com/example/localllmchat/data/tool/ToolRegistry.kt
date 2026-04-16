@@ -46,6 +46,8 @@ class ToolRegistry {
         val lower = modelName.lowercase()
         return lower.contains("qwen3") ||
                 lower.contains("qwen2.5vl") ||
-                lower.contains("lfm2.5")
+                lower.contains("lfm2.5") ||
+                lower.contains("nanbeige") ||
+                lower.contains("gemma4")
     }
 }

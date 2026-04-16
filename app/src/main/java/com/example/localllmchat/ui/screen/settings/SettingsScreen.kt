@@ -38,10 +38,14 @@ import com.example.localllmchat.data.repository.SettingsRepository
 
 private val PRESET_MODELS = listOf(
     "gemma3:4b",
+    "gemma4-it:e2b",
     "lfm2.5-it:1.2b",
     "lfm2.5-tk:1.2b",
+    "qwen3.5:0.8b",
     "qwen3.5:2b",
     "qwen3.5:4b",
+    "qwen3.5:9b",
+    "nanbeige4.1:3b",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
