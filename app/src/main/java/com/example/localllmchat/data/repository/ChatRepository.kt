@@ -5,6 +5,8 @@ import com.example.localllmchat.data.local.ConversationEntity
 import com.example.localllmchat.data.local.PresetEntity
 import com.example.localllmchat.data.local.MessageDao
 import com.example.localllmchat.data.local.MessageEntity
+import com.example.localllmchat.data.local.MessageImageDao
+import com.example.localllmchat.data.local.MessageImageEntity
 import com.example.localllmchat.data.remote.AccumulatedToolCall
 import com.example.localllmchat.data.remote.ApiChatMessage
 import com.example.localllmchat.data.remote.ApiChatRequest
@@ -44,6 +46,7 @@ class ChatRepository(
     private val database: AppDatabase,
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao,
+    private val messageImageDao: MessageImageDao,
     private val settingsRepository: SettingsRepository,
     private val toolRegistry: ToolRegistry
 ) {
@@ -193,11 +196,25 @@ class ChatRepository(
 
             val userMsgId = addMessage(conversationId, "user", dbContent, parentMessageId = parentId)
 
+            // 画像を DB に永続化し、以降のターンでも buildApiMessages が base64 を再送できるようにする
+            // （FLM checkpoint 照合を画像込みトークン列で一致させるため）
+            if (imageAttachments.isNotEmpty()) {
+                messageImageDao.insertAll(
+                    imageAttachments.mapIndexed { index, img ->
+                        MessageImageEntity(
+                            messageId = userMsgId,
+                            fileName = img.fileName,
+                            mimeType = img.mimeType,
+                            base64Data = img.base64Data,
+                            sortOrder = index
+                        )
+                    }
+                )
+            }
+
             generateResponse(
                 conversationId = conversationId,
                 parentMessageId = userMsgId,
-                imageAttachments = imageAttachments,
-                userMessage = userMessage,
                 onStreamUpdate = onStreamUpdate,
                 onToolStatus = onToolStatus,
                 onAskUser = onAskUser
@@ -212,8 +229,6 @@ class ChatRepository(
         conversationId: Long,
         parentMessageId: Long,
         siblingIndex: Int = 0,
-        imageAttachments: List<ProcessedAttachment.ImageAttachment> = emptyList(),
-        userMessage: String = "",
         onStreamUpdate: ((content: String, reasoning: String) -> Unit)? = null,
         onToolStatus: ((status: String?) -> Unit)? = null,
         onAskUser: ((question: String, options: List<String>) -> CompletableDeferred<String>)? = null
@@ -232,7 +247,7 @@ class ChatRepository(
             systemPrompt.isBlank() -> TOOL_GUIDANCE_PROMPT
             else -> systemPrompt + "\n\n" + TOOL_GUIDANCE_PROMPT
         }
-        val step1Messages = buildApiMessages(conversationId, imageAttachments, userMessage, effectiveSystemPrompt, toolsEnabled, upToMessageId = parentMessageId)
+        val step1Messages = buildApiMessages(conversationId, effectiveSystemPrompt, toolsEnabled, upToMessageId = parentMessageId)
         val step1Request = ApiChatRequest(
             model = modelName,
             messages = step1Messages,
@@ -304,7 +319,7 @@ class ChatRepository(
                 currentParentId = lastMsgId
                 currentSiblingIndex = 0
 
-                val nextMessages = buildApiMessages(conversationId, emptyList(), "", effectiveSystemPrompt)
+                val nextMessages = buildApiMessages(conversationId, effectiveSystemPrompt)
                 val nextRequest = ApiChatRequest(
                     model = modelName,
                     messages = nextMessages,
@@ -671,8 +686,6 @@ class ChatRepository(
 
     private suspend fun buildApiMessages(
         conversationId: Long,
-        imageAttachments: List<ProcessedAttachment.ImageAttachment>,
-        userMessage: String,
         systemPrompt: String,
         toolsEnabled: Boolean = true,
         upToMessageId: Long? = null
@@ -689,9 +702,16 @@ class ChatRepository(
             (toolsEnabled || (msg.role != "tool" && msg.toolCallsJson == null))
         }
 
-        val apiMessages = messages.mapIndexed { index, msg ->
-            val isLastUserMessage = index == messages.lastIndex && msg.role == "user"
+        // 履歴中の全 user メッセージの画像を DB から復元し、毎ターン base64 を再送する。
+        // 初回送信と再送でトークン列をバイト一致させ、FLM checkpoint 照合を保つため
+        val userMessageIds = messages.filter { it.role == "user" }.map { it.id }
+        val imagesByMessageId = if (userMessageIds.isNotEmpty()) {
+            messageImageDao.getForMessages(userMessageIds).groupBy { it.messageId }
+        } else {
+            emptyMap()
+        }
 
+        val apiMessages = messages.map { msg ->
             when {
                 // Tool result message
                 msg.role == "tool" -> {
@@ -724,25 +744,26 @@ class ChatRepository(
                         .trim()
                     ApiChatMessage(role = msg.role, content = MessageContent.Text(content.normalizeForApi()))
                 }
-                // Last user message with image attachments
-                isLastUserMessage && imageAttachments.isNotEmpty() -> {
-                    val parts = mutableListOf<ContentPart>()
-                    val sourceText = if (msg.isSummarized && msg.summaryText != null) msg.summaryText else msg.content
-                    val cleanedText = sourceText.replace(Regex("\\n\\n\\[画像添付: [^\\]]+\\]$"), "")
-                    if (cleanedText.isNotBlank()) {
-                        parts.add(ContentPart.TextPart(cleanedText.normalizeForApi()))
-                    }
-                    imageAttachments.forEach { img ->
-                        parts.add(ContentPart.ImageUrlPart(
-                            ImageUrl("data:${img.mimeType};base64,${img.base64Data}")
-                        ))
-                    }
-                    ApiChatMessage(role = msg.role, content = MessageContent.Parts(parts))
-                }
-                // Normal user message
+                // User message: 画像は DB から復元して毎ターン再送（最後の user に限らず全 user 共通）
                 else -> {
                     val sourceText = if (msg.isSummarized && msg.summaryText != null) msg.summaryText else msg.content
-                    ApiChatMessage(role = msg.role, content = MessageContent.Text(sourceText.normalizeForApi()))
+                    val images = imagesByMessageId[msg.id].orEmpty()
+                    if (images.isNotEmpty()) {
+                        val parts = mutableListOf<ContentPart>()
+                        // 画像のみ送信時はプレースホルダ単体で先頭に \n\n が付かないため optional にする
+                        val cleanedText = sourceText.replace(Regex("(\\n\\n)?\\[画像添付: [^\\]]+\\]$"), "")
+                        if (cleanedText.isNotBlank()) {
+                            parts.add(ContentPart.TextPart(cleanedText.normalizeForApi()))
+                        }
+                        images.sortedBy { it.sortOrder }.forEach { img ->
+                            parts.add(ContentPart.ImageUrlPart(
+                                ImageUrl("data:${img.mimeType};base64,${img.base64Data}")
+                            ))
+                        }
+                        ApiChatMessage(role = msg.role, content = MessageContent.Parts(parts))
+                    } else {
+                        ApiChatMessage(role = msg.role, content = MessageContent.Text(sourceText.normalizeForApi()))
+                    }
                 }
             }
         }

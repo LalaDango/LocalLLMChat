@@ -53,7 +53,7 @@ Kotlin / Jetpack Compose の Android チャットアプリ。PC の NPU 上で�
 - 履歴構築時: `isSummarized == true` なら `summaryText` を API に送信
 
 ### DB マイグレーション
-- 現在 version 9（4→5 翻訳、5→6 tool calling、6→7 ブランチ、7→8 要約設定、8→9 プリセット）
+- 現在 version 11（4→5 翻訳、5→6 tool calling、6→7 ブランチ、7→8 要約設定、8→9 プリセット、9→10 KV実測値、10→11 画像永続化 message_images）
 - 新しいカラム追加時は `AppDatabase.kt` に Migration を追加すること
 
 ### DI

@@ -252,7 +252,7 @@ class ChatViewModel(
         if (capacity != null) {
             val estimatedInput =
                 ((message.length + (textAttachment?.content?.length ?: 0)) * 0.9).toInt() +
-                    imageAttachments.sumOf { it.base64Data.length * 3 / 8 } // base64長×3/4=バイト数、その1/2
+                    imageAttachments.size * IMAGE_TOKENS_ESTIMATE
             val projected = state.conversationTotalTokens + estimatedInput + MAX_COMPLETION_TOKENS
             if (projected >= capacity) {
                 // 入力・添付はクリアしない（要約・除外で履歴を減らした後に再送できるように残す）
@@ -609,6 +609,9 @@ class ChatViewModel(
     companion object {
         // ChatRequest.maxTokens (8192) と同値。応答生成分を projected に含めるための保守値
         private const val MAX_COMPLETION_TOKENS = 8192
+
+        // 画像はエンコーダで解像度によらず固定 ~256 トークンに正規化される（P3-1 実測）。2倍マージンで見積る
+        private const val IMAGE_TOKENS_ESTIMATE = 512
 
         // 履歴を書き換える操作は FLM checkpoint 照合を外し、次ターンが全量 prefill になるため
         private const val HISTORY_RELOAD_HINT = "※次の応答は履歴の再読み込みで時間がかかることがあります"

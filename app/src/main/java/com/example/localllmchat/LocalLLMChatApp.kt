@@ -40,6 +40,7 @@ class LocalLLMChatApp : Application() {
             database = database,
             conversationDao = database.conversationDao(),
             messageDao = database.messageDao(),
+            messageImageDao = database.messageImageDao(),
             settingsRepository = settingsRepository,
             toolRegistry = toolRegistry
         )
