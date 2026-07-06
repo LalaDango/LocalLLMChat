@@ -26,3 +26,7 @@ local.properties
 # Windows reserved device name (empty file artifact)
 nul
 docs/
+
+# FLM tool harness raw logs (scripts/flm_tool_harness.py)
+results_*.jsonl
+__pycache__/
