@@ -1,6 +1,8 @@
 package com.example.localllmchat.ui.screen.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,6 +13,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.DropdownMenuItem
@@ -22,6 +26,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -30,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -47,6 +55,13 @@ private val PRESET_MODELS = listOf(
     "qwen3.5:4b",
     "qwen3.5:9b",
     "nanbeige4.1:3b",
+)
+
+// P3-3: temperature はプリセット選択のみ露出（FLM 既定 0.8 / Gemma 4 系推奨 1.0）
+private val TEMPERATURE_PRESETS = listOf(
+    "堅め" to 0.45,
+    "標準" to 0.8,
+    "創作" to 1.0,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -191,6 +206,81 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.padding(top = 4.dp)
             )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            var advancedExpanded by remember { mutableStateOf(false) }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { advancedExpanded = !advancedExpanded },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "詳細設定（生成パラメータ）",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = if (advancedExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (advancedExpanded) "折りたたむ" else "展開する"
+                )
+            }
+
+            if (advancedExpanded) {
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Temperature",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    TEMPERATURE_PRESETS.forEachIndexed { index, (label, value) ->
+                        SegmentedButton(
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = TEMPERATURE_PRESETS.size
+                            ),
+                            selected = uiState.temperature == value,
+                            onClick = { viewModel.updateTemperature(value) }
+                        ) {
+                            Text("$label $value")
+                        }
+                    }
+                }
+
+                Text(
+                    text = "既定は堅め 0.45（FLM 既定は 0.8、Gemma 4 系の推奨は 1.0）。" +
+                        "会話の途中で変えてもキャッシュには影響しません",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = uiState.maxCompletionTokens.toString(),
+                    onValueChange = { viewModel.updateMaxCompletionTokens(it) },
+                    label = { Text("Max Tokens（応答の最大長）") },
+                    placeholder = { Text("8192") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+
+                Text(
+                    text = "既定 8192（未指定時の FLM 既定は 4096）。" +
+                        "容量超過ガードの応答分見積りにも同じ値が使われます",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 

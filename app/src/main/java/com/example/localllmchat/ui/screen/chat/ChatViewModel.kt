@@ -38,6 +38,7 @@ data class ChatUiState(
     val conversationTotalTokens: Int = 0, // measured active_kv_tokens, or estimated cumulative tokens as fallback
     val contextWindowSize: Int = SettingsRepository.DEFAULT_CONTEXT_WINDOW_SIZE,
     val maxAttachmentTextKb: Int = SettingsRepository.DEFAULT_MAX_ATTACHMENT_TEXT_KB,
+    val maxCompletionTokens: Int = SettingsRepository.DEFAULT_MAX_COMPLETION_TOKENS,
     val measuredKvCapacity: Int? = null, // max_kv_token_capacity from FLM (overrides contextWindowSize when present)
     val isFullPrefill: Boolean = false, // last turn was a full prefill (cache miss)
     val capacityWarning: CapacityWarning? = null,
@@ -110,6 +111,11 @@ class ChatViewModel(
         viewModelScope.launch {
             settingsRepository.maxAttachmentTextKb.collect { kb ->
                 _uiState.value = _uiState.value.copy(maxAttachmentTextKb = kb)
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.maxCompletionTokens.collect { tokens ->
+                _uiState.value = _uiState.value.copy(maxCompletionTokens = tokens)
             }
         }
     }
@@ -255,7 +261,8 @@ class ChatViewModel(
             val estimatedInput =
                 ((message.length + (textAttachment?.content?.length ?: 0)) * 0.9).toInt() +
                     imageAttachments.size * IMAGE_TOKENS_ESTIMATE
-            val projected = state.conversationTotalTokens + estimatedInput + MAX_COMPLETION_TOKENS
+            // 応答生成分は設定の max_tokens（ApiChatRequest に渡す値と同じ）で見積る
+            val projected = state.conversationTotalTokens + estimatedInput + state.maxCompletionTokens
             if (projected >= capacity) {
                 // 入力・添付はクリアしない（要約・除外で履歴を減らした後に再送できるように残す）
                 _uiState.value = state.copy(capacityWarning = CapacityWarning(projected, capacity))
@@ -639,9 +646,6 @@ class ChatViewModel(
     }
 
     companion object {
-        // ChatRequest.maxTokens (8192) と同値。応答生成分を projected に含めるための保守値
-        private const val MAX_COMPLETION_TOKENS = 8192
-
         // 画像はエンコーダで解像度によらず固定 ~256 トークンに正規化される（P3-1 実測）。2倍マージンで見積る
         private const val IMAGE_TOKENS_ESTIMATE = 512
 

@@ -3,6 +3,7 @@ package com.example.localllmchat.data.repository
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -22,12 +23,16 @@ class SettingsRepository(private val context: Context) {
         private val SYSTEM_PROMPT_KEY = stringPreferencesKey("system_prompt")
         private val DISABLED_TOOLS_KEY = stringSetPreferencesKey("disabled_tools")
         private val MAX_ATTACHMENT_TEXT_KB_KEY = intPreferencesKey("max_attachment_text_kb")
+        private val TEMPERATURE_KEY = doublePreferencesKey("temperature")
+        private val MAX_COMPLETION_TOKENS_KEY = intPreferencesKey("max_completion_tokens")
 
         const val DEFAULT_BASE_URL = "http://localhost:8080"
         const val DEFAULT_MODEL_NAME = "gemma4-it:e4b"
         const val DEFAULT_CONTEXT_WINDOW_SIZE = 32768
         const val DEFAULT_SYSTEM_PROMPT = ""
         const val DEFAULT_MAX_ATTACHMENT_TEXT_KB = 60
+        const val DEFAULT_TEMPERATURE = 0.45
+        const val DEFAULT_MAX_COMPLETION_TOKENS = 8192
     }
 
     val baseUrl: Flow<String> = context.dataStore.data.map { preferences ->
@@ -54,6 +59,14 @@ class SettingsRepository(private val context: Context) {
         preferences[MAX_ATTACHMENT_TEXT_KB_KEY] ?: DEFAULT_MAX_ATTACHMENT_TEXT_KB
     }
 
+    val temperature: Flow<Double> = context.dataStore.data.map { preferences ->
+        preferences[TEMPERATURE_KEY] ?: DEFAULT_TEMPERATURE
+    }
+
+    val maxCompletionTokens: Flow<Int> = context.dataStore.data.map { preferences ->
+        preferences[MAX_COMPLETION_TOKENS_KEY] ?: DEFAULT_MAX_COMPLETION_TOKENS
+    }
+
     suspend fun saveBaseUrl(url: String) {
         context.dataStore.edit { preferences ->
             preferences[BASE_URL_KEY] = url
@@ -78,13 +91,23 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveSettings(baseUrl: String, modelName: String, contextWindowSize: Int, systemPrompt: String, maxAttachmentTextKb: Int) {
+    suspend fun saveSettings(
+        baseUrl: String,
+        modelName: String,
+        contextWindowSize: Int,
+        systemPrompt: String,
+        maxAttachmentTextKb: Int,
+        temperature: Double,
+        maxCompletionTokens: Int
+    ) {
         context.dataStore.edit { preferences ->
             preferences[BASE_URL_KEY] = baseUrl
             preferences[MODEL_NAME_KEY] = modelName
             preferences[CONTEXT_WINDOW_SIZE_KEY] = contextWindowSize
             preferences[SYSTEM_PROMPT_KEY] = systemPrompt
             preferences[MAX_ATTACHMENT_TEXT_KB_KEY] = maxAttachmentTextKb
+            preferences[TEMPERATURE_KEY] = temperature
+            preferences[MAX_COMPLETION_TOKENS_KEY] = maxCompletionTokens
         }
     }
 }

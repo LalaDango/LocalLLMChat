@@ -15,6 +15,8 @@ data class SettingsUiState(
     val contextWindowSize: Int = SettingsRepository.DEFAULT_CONTEXT_WINDOW_SIZE,
     val systemPrompt: String = SettingsRepository.DEFAULT_SYSTEM_PROMPT,
     val maxAttachmentTextKb: Int = SettingsRepository.DEFAULT_MAX_ATTACHMENT_TEXT_KB,
+    val temperature: Double = SettingsRepository.DEFAULT_TEMPERATURE,
+    val maxCompletionTokens: Int = SettingsRepository.DEFAULT_MAX_COMPLETION_TOKENS,
     val isSaving: Boolean = false,
     val saveSuccess: Boolean = false
 )
@@ -56,6 +58,16 @@ class SettingsViewModel(
                 _uiState.value = _uiState.value.copy(maxAttachmentTextKb = kb)
             }
         }
+        viewModelScope.launch {
+            settingsRepository.temperature.collect { temp ->
+                _uiState.value = _uiState.value.copy(temperature = temp)
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.maxCompletionTokens.collect { tokens ->
+                _uiState.value = _uiState.value.copy(maxCompletionTokens = tokens)
+            }
+        }
     }
 
     fun updateBaseUrl(url: String) {
@@ -81,6 +93,16 @@ class SettingsViewModel(
         _uiState.value = _uiState.value.copy(maxAttachmentTextKb = kb, saveSuccess = false)
     }
 
+    fun updateTemperature(value: Double) {
+        _uiState.value = _uiState.value.copy(temperature = value, saveSuccess = false)
+    }
+
+    fun updateMaxCompletionTokens(value: String) {
+        val tokens = (value.toIntOrNull() ?: SettingsRepository.DEFAULT_MAX_COMPLETION_TOKENS)
+            .coerceAtLeast(1)
+        _uiState.value = _uiState.value.copy(maxCompletionTokens = tokens, saveSuccess = false)
+    }
+
     fun saveSettings() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSaving = true)
@@ -89,7 +111,9 @@ class SettingsViewModel(
                 modelName = _uiState.value.modelName,
                 contextWindowSize = _uiState.value.contextWindowSize,
                 systemPrompt = _uiState.value.systemPrompt,
-                maxAttachmentTextKb = _uiState.value.maxAttachmentTextKb
+                maxAttachmentTextKb = _uiState.value.maxAttachmentTextKb,
+                temperature = _uiState.value.temperature,
+                maxCompletionTokens = _uiState.value.maxCompletionTokens
             )
             _uiState.value = _uiState.value.copy(isSaving = false, saveSuccess = true)
         }

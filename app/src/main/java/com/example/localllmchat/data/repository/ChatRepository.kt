@@ -238,6 +238,8 @@ class ChatRepository(
         val systemPrompt = resolveSystemPrompt(conversationId)
         val disabledTools = settingsRepository.disabledTools.first()
         val toolDefinitions = toolRegistry.getDefinitions(modelName, disabledTools)
+        val temperature = settingsRepository.temperature.first()
+        val maxCompletionTokens = settingsRepository.maxCompletionTokens.first()
 
         val api = ApiClient.getChatApi(baseUrl)
 
@@ -252,7 +254,9 @@ class ChatRepository(
             model = modelName,
             messages = step1Messages,
             tools = toolDefinitions,
-            stream = true
+            stream = true,
+            temperature = temperature,
+            maxTokens = maxCompletionTokens
         )
 
         var result = streamApiCall(api, step1Request, onStreamUpdate)
@@ -324,7 +328,9 @@ class ChatRepository(
                     model = modelName,
                     messages = nextMessages,
                     tools = toolDefinitions,
-                    stream = true
+                    stream = true,
+                    temperature = temperature,
+                    maxTokens = maxCompletionTokens
                 )
                 result = streamApiCall(api, nextRequest, onStreamUpdate)
             }
