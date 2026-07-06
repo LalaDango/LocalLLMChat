@@ -249,7 +249,7 @@ class ChatRepository(
             systemPrompt.isBlank() -> TOOL_GUIDANCE_PROMPT
             else -> systemPrompt + "\n\n" + TOOL_GUIDANCE_PROMPT
         }
-        val step1Messages = buildApiMessages(conversationId, effectiveSystemPrompt, toolsEnabled, upToMessageId = parentMessageId)
+        val step1Messages = buildApiMessages(conversationId, effectiveSystemPrompt, modelName, toolsEnabled, upToMessageId = parentMessageId)
         val step1Request = ApiChatRequest(
             model = modelName,
             messages = step1Messages,
@@ -323,7 +323,7 @@ class ChatRepository(
                 currentParentId = lastMsgId
                 currentSiblingIndex = 0
 
-                val nextMessages = buildApiMessages(conversationId, effectiveSystemPrompt)
+                val nextMessages = buildApiMessages(conversationId, effectiveSystemPrompt, modelName)
                 val nextRequest = ApiChatRequest(
                     model = modelName,
                     messages = nextMessages,
@@ -693,6 +693,7 @@ class ChatRepository(
     private suspend fun buildApiMessages(
         conversationId: Long,
         systemPrompt: String,
+        modelName: String,
         toolsEnabled: Boolean = true,
         upToMessageId: Long? = null
     ): List<ApiChatMessage> {
@@ -708,6 +709,22 @@ class ChatRepository(
             (toolsEnabled || (msg.role != "tool" && msg.toolCallsJson == null))
         }
 
+        // gemma4系: role:"tool" が FLM のテンプレートでモデルに届かないため送信時のみ変換する。
+        // 変換は DB の行 + modelName の純関数（checkpoint 照合を崩さないため決定的であること）
+        val convertToolRole = toolRegistry.requiresToolRoleConversion(modelName)
+        val toolCallById: Map<String, ToolCall> = if (convertToolRole) {
+            messages.filter { it.role == "assistant" && it.toolCallsJson != null }
+                .flatMap { msg ->
+                    val toolCalls: List<ToolCall> = gson.fromJson(
+                        msg.toolCallsJson,
+                        object : TypeToken<List<ToolCall>>() {}.type
+                    )
+                    toolCalls.mapNotNull { tc -> tc.id?.let { it to tc } }
+                }.toMap()
+        } else {
+            emptyMap()
+        }
+
         // 履歴中の全 user メッセージの画像を DB から復元し、毎ターン base64 を再送する。
         // 初回送信と再送でトークン列をバイト一致させ、FLM checkpoint 照合を保つため
         val userMessageIds = messages.filter { it.role == "user" }.map { it.id }
@@ -717,8 +734,54 @@ class ChatRepository(
             emptyMap()
         }
 
-        val apiMessages = messages.map { msg ->
-            when {
+        val apiMessages = mutableListOf<ApiChatMessage>()
+        var i = 0
+        while (i < messages.size) {
+            val msg = messages[i]
+
+            // gemma4系: 連続する tool メッセージを1つの user メッセージにマージ
+            // （gemma テンプレートの user/assistant 交互制約対策）。
+            // 呼び出し情報（name+args）もこちらに含める。assistant 側に書式を残すと
+            // モデルが平文で模倣する（2026-07-07 実機確認）ため、報告形の書式で user 側に置く。
+            // args は必須: e4b は本文なし tool_call のみを返すことがあり、
+            // その場合クイズの質問文等は args の中にしか存在しない
+            if (convertToolRole && msg.role == "tool") {
+                val group = mutableListOf(msg)
+                while (i + 1 < messages.size && messages[i + 1].role == "tool") {
+                    i++
+                    group.add(messages[i])
+                }
+                val lines = group.map { m ->
+                    val tc = toolCallById[m.toolCallId]
+                    val name = tc?.function?.name ?: "unknown"
+                    val args = tc?.function?.arguments ?: "{}"
+                    "[ツール ${name}(${args}) の実行結果] ${m.content}"
+                }
+                apiMessages.add(
+                    ApiChatMessage(
+                        role = "user",
+                        content = MessageContent.Text(
+                            (lines.joinToString("\n") + "\nこの結果を踏まえて応答してください").normalizeForApi()
+                        )
+                    )
+                )
+                i++
+                continue
+            }
+
+            // gemma4系: assistant の tool_calls は送らない。畳み込みテキストも置かない
+            // （assistant 履歴に書式があると模倣のコピー元になる）。本文が空ならメッセージごとスキップ
+            if (convertToolRole && msg.role == "assistant" && msg.toolCallsJson != null) {
+                if (msg.content.isNotEmpty()) {
+                    apiMessages.add(
+                        ApiChatMessage(role = "assistant", content = MessageContent.Text(msg.content.normalizeForApi()))
+                    )
+                }
+                i++
+                continue
+            }
+
+            val apiMessage = when {
                 // Tool result message
                 msg.role == "tool" -> {
                     ApiChatMessage(
@@ -772,6 +835,8 @@ class ChatRepository(
                     }
                 }
             }
+            apiMessages.add(apiMessage)
+            i++
         }
 
         return if (systemPrompt.isNotBlank()) {

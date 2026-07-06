@@ -50,4 +50,9 @@ class ToolRegistry {
                 lower.contains("nanbeige") ||
                 lower.contains("gemma4")
     }
+
+    // gemma系は FLM 経由だと role:"tool" がモデルに届かない（テンプレート実装が落とす）ため、
+    // 送信時に tool→user 変換 + tool_calls のテキスト畳み込みが必要
+    fun requiresToolRoleConversion(modelName: String): Boolean =
+        modelName.lowercase().contains("gemma4")
 }
