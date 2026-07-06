@@ -5,6 +5,8 @@ Kotlin / Jetpack Compose の Android チャットアプリ。PC の NPU 上で�
 
 サーバー側環境（FastFlowLM v0.9.43 / 主力モデル gemma4-it:e4b / NPU 7.6GB 制約 / KV キャッシュ挙動）の詳細は `.claude/skills/local-ai-env-ref/` を参照。環境判定はメモリの旧記述よりこのスキルを優先すること。
 
+このスキルは **LocalLLMChat 特化のスリム版**で、Claude.ai 側のフル版 .skill（SM 含む環境全体の正本）とは**別ディストリビューション**。ファイル一致は目指さない。新知見が出たら双方向に「内容」を選別して還流する（ファイル丸ごとコピーで上書きしない。フル版由来の SM/Vane/モバイル文脈は取り込まない）。
+
 ## ビルド・実行手順
 
 1. Android Studio で開く

@@ -17,8 +17,9 @@ local.properties
 *.apk
 *.aab
 
-# Claude Code session data
-/.claude/
+# Claude Code session data (skills are tracked; settings/commands stay local)
+/.claude/*
+!/.claude/skills/
 
 # Kotlin compiler logs
 /.kotlin/
