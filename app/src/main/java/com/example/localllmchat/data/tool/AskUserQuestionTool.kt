@@ -19,7 +19,7 @@ class AskUserQuestionTool : ToolHandler {
     override val definition = ToolDefinition(
         function = FunctionDefinition(
             name = "ask_user_question",
-            description = "Ask the user a multiple-choice question and wait for their answer. Use this when you need clarification or a decision from the user to proceed.",
+            description = "Ask the user a multiple-choice question and wait for their answer. Use this when you need clarification or a decision from the user to proceed. The tool result's 'answer' field contains the user's actual answer (e.g. \"User selected: <option>\"). After receiving it, do not repeat the question; respond to the user's answer (e.g. judge correctness, then continue).",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(

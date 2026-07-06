@@ -49,6 +49,20 @@ class ChatRepository(
 ) {
     private val gson = Gson()
 
+    companion object {
+        // ツール実行ループの上限（1ユーザー発言あたり）。超過分の tool_calls はテキスト扱いで打ち切り
+        private const val MAX_TOOL_ROUNDS = 3
+
+        // 小型モデル（gemma4-it:e4b等）はツール結果を無視して質問を繰り返すことがあるため、
+        // tools送信時のみ system prompt にガイダンスを追記する
+        private val TOOL_GUIDANCE_PROMPT = """
+            # ツール使用ルール
+            - ツール呼び出し後、role が tool のメッセージで実行結果が返ってくる。次の応答は必ずその結果の内容を踏まえて書くこと。
+            - ask_user_question の結果の answer にはユーザーの回答が入っている（"User selected: " は選択肢の選択、"User's custom answer: " は自由記述、"User cancelled" はキャンセル）。回答を受け取ったら同じ質問を本文で繰り返さず、その回答に対する応答（正誤判定・次の処理など）を返すこと。
+            - get_datetime の結果の datetime/date/time が現在日時。日時に関する質問にはこの値を使って答えること。
+        """.trimIndent()
+    }
+
     fun getAllConversations(): Flow<List<ConversationEntity>> {
         return conversationDao.getAllConversations()
     }
@@ -110,6 +124,8 @@ class ChatRepository(
         totalTokens: Int? = null,
         decodingSpeedTps: Double? = null,
         prefillSpeedTps: Double? = null,
+        activeKvTokens: Int? = null,
+        maxKvTokenCapacity: Int? = null,
         toolCallsJson: String? = null,
         toolCallId: String? = null
     ): Long {
@@ -124,6 +140,8 @@ class ChatRepository(
             totalTokens = totalTokens,
             decodingSpeedTps = decodingSpeedTps,
             prefillSpeedTps = prefillSpeedTps,
+            activeKvTokens = activeKvTokens,
+            maxKvTokenCapacity = maxKvTokenCapacity,
             toolCallsJson = toolCallsJson,
             toolCallId = toolCallId
         )
@@ -209,7 +227,12 @@ class ChatRepository(
         val api = ApiClient.getChatApi(baseUrl)
 
         val toolsEnabled = toolDefinitions != null
-        val step1Messages = buildApiMessages(conversationId, imageAttachments, userMessage, systemPrompt, toolsEnabled, upToMessageId = parentMessageId)
+        val effectiveSystemPrompt = when {
+            !toolsEnabled -> systemPrompt
+            systemPrompt.isBlank() -> TOOL_GUIDANCE_PROMPT
+            else -> systemPrompt + "\n\n" + TOOL_GUIDANCE_PROMPT
+        }
+        val step1Messages = buildApiMessages(conversationId, imageAttachments, userMessage, effectiveSystemPrompt, toolsEnabled, upToMessageId = parentMessageId)
         val step1Request = ApiChatRequest(
             model = modelName,
             messages = step1Messages,
@@ -217,105 +240,111 @@ class ChatRepository(
             stream = true
         )
 
-        val step1Result = streamApiCall(api, step1Request, onStreamUpdate)
+        var result = streamApiCall(api, step1Request, onStreamUpdate)
 
-        if (step1Result.toolCallMap.isNotEmpty()) {
-            val completedToolCalls = step1Result.toolCallMap.values.map { acc ->
-                val toolCallId = if (acc.id.isNullOrBlank() || acc.id!!.contains("("))
-                    "call_${java.util.UUID.randomUUID()}"
-                else acc.id!!
-                ToolCall(
-                    id = toolCallId,
-                    type = "function",
-                    function = ToolCallFunction(name = acc.name, arguments = acc.arguments.toString())
+        // ツール実行ループ: 応答に tool_calls が含まれる限り「保存→実行→再送信」を繰り返す。
+        // MAX_TOOL_ROUNDS 超過分の tool_calls は実行せずテキスト扱いで打ち切り（暴走防止）
+        var rounds = 0
+        var currentParentId = parentMessageId
+        var currentSiblingIndex = siblingIndex
+
+        val askTool = toolRegistry.getTool<AskUserQuestionTool>("ask_user_question")
+        try {
+            askTool?.onAskUser = onAskUser
+
+            while (result.toolCallMap.isNotEmpty() && rounds < MAX_TOOL_ROUNDS) {
+                rounds++
+                val completedToolCalls = result.toolCallMap.values.map { acc ->
+                    val toolCallId = if (acc.id.isNullOrBlank() || acc.id!!.contains("("))
+                        "call_${java.util.UUID.randomUUID()}"
+                    else acc.id!!
+                    ToolCall(
+                        id = toolCallId,
+                        type = "function",
+                        function = ToolCallFunction(name = acc.name, arguments = acc.arguments.toString())
+                    )
+                }
+                val toolCallsJson = gson.toJson(completedToolCalls)
+
+                val assistantContent = buildRawMessage(result)
+                var lastMsgId = addMessage(
+                    conversationId = conversationId,
+                    role = "assistant",
+                    content = assistantContent.ifEmpty { "" },
+                    parentMessageId = currentParentId,
+                    siblingIndex = currentSiblingIndex,
+                    toolCallsJson = toolCallsJson,
+                    promptTokens = result.usage?.promptTokens,
+                    completionTokens = result.usage?.completionTokens,
+                    totalTokens = result.usage?.totalTokens,
+                    decodingSpeedTps = result.usage?.decodingSpeedTps,
+                    prefillSpeedTps = result.usage?.prefillSpeedTps,
+                    activeKvTokens = result.usage?.activeKvTokens,
+                    maxKvTokenCapacity = result.usage?.maxKvTokenCapacity
                 )
-            }
-            val toolCallsJson = gson.toJson(completedToolCalls)
 
-            val assistantContent = buildRawMessage(step1Result)
-            var lastMsgId = addMessage(
-                conversationId = conversationId,
-                role = "assistant",
-                content = assistantContent.ifEmpty { "" },
-                parentMessageId = parentMessageId,
-                siblingIndex = siblingIndex,
-                toolCallsJson = toolCallsJson,
-                promptTokens = step1Result.usage?.promptTokens,
-                completionTokens = step1Result.usage?.completionTokens,
-                totalTokens = step1Result.usage?.totalTokens,
-                decodingSpeedTps = step1Result.usage?.decodingSpeedTps,
-                prefillSpeedTps = step1Result.usage?.prefillSpeedTps
-            )
-
-            val askTool = toolRegistry.getTool<AskUserQuestionTool>("ask_user_question")
-            try {
-                askTool?.onAskUser = onAskUser
                 onToolStatus?.invoke("ツール実行中...")
 
                 for (tc in completedToolCalls) {
                     val toolName = tc.function?.name ?: continue
                     val toolArgs = tc.function.arguments ?: "{}"
-                    val result = toolRegistry.execute(toolName, toolArgs)
+                    val toolResult = toolRegistry.execute(toolName, toolArgs)
                     lastMsgId = addMessage(
                         conversationId = conversationId,
                         role = "tool",
-                        content = result,
+                        content = toolResult,
                         parentMessageId = lastMsgId,
                         toolCallId = tc.id
                     )
                 }
-            } finally {
-                askTool?.onAskUser = null
+
+                onToolStatus?.invoke(null)
+
+                // 2周目以降の assistant は tool メッセージの子（ブランチの siblingIndex は初回のみ有効）
+                currentParentId = lastMsgId
+                currentSiblingIndex = 0
+
+                val nextMessages = buildApiMessages(conversationId, emptyList(), "", effectiveSystemPrompt)
+                val nextRequest = ApiChatRequest(
+                    model = modelName,
+                    messages = nextMessages,
+                    tools = toolDefinitions,
+                    stream = true
+                )
+                result = streamApiCall(api, nextRequest, onStreamUpdate)
             }
-
-            onToolStatus?.invoke(null)
-
-            val step3Messages = buildApiMessages(conversationId, emptyList(), "", systemPrompt)
-            val step3Request = ApiChatRequest(
-                model = modelName,
-                messages = step3Messages,
-                tools = toolDefinitions,
-                stream = true
-            )
-
-            val step3Result = streamApiCall(api, step3Request, onStreamUpdate)
-            val rawMessage = buildRawMessage(step3Result)
-            val assistantMessage = cleanupIncompleteThinkTags(rawMessage)
-
-            addMessage(
-                conversationId = conversationId,
-                role = "assistant",
-                content = assistantMessage,
-                parentMessageId = lastMsgId,
-                promptTokens = step3Result.usage?.promptTokens,
-                completionTokens = step3Result.usage?.completionTokens,
-                totalTokens = step3Result.usage?.totalTokens,
-                decodingSpeedTps = step3Result.usage?.decodingSpeedTps,
-                prefillSpeedTps = step3Result.usage?.prefillSpeedTps
-            )
-
-            updateConversationTitleIfNeeded(conversationId)
-            return Result.success(assistantMessage)
-        } else {
-            val rawMessage = buildRawMessage(step1Result)
-            val assistantMessage = cleanupIncompleteThinkTags(rawMessage)
-
-            addMessage(
-                conversationId = conversationId,
-                role = "assistant",
-                content = assistantMessage,
-                parentMessageId = parentMessageId,
-                siblingIndex = siblingIndex,
-                promptTokens = step1Result.usage?.promptTokens,
-                completionTokens = step1Result.usage?.completionTokens,
-                totalTokens = step1Result.usage?.totalTokens,
-                decodingSpeedTps = step1Result.usage?.decodingSpeedTps,
-                prefillSpeedTps = step1Result.usage?.prefillSpeedTps
-            )
-
-            updateConversationTitleIfNeeded(conversationId)
-            return Result.success(assistantMessage)
+        } finally {
+            askTool?.onAskUser = null
         }
+
+        val rawMessage = buildRawMessage(result)
+        var assistantMessage = cleanupIncompleteThinkTags(rawMessage)
+
+        if (result.toolCallMap.isNotEmpty()) {
+            Log.w("ChatRepository", "Tool round limit ($MAX_TOOL_ROUNDS) reached; ${result.toolCallMap.size} tool call(s) left unexecuted")
+            // tool_calls のみで本文が空だと空バブルになるため、打ち切り理由を表示する
+            if (assistantMessage.isBlank()) {
+                assistantMessage = "（ツール実行回数が上限（${MAX_TOOL_ROUNDS}回）に達したため、応答を打ち切りました）"
+            }
+        }
+
+        addMessage(
+            conversationId = conversationId,
+            role = "assistant",
+            content = assistantMessage,
+            parentMessageId = currentParentId,
+            siblingIndex = currentSiblingIndex,
+            promptTokens = result.usage?.promptTokens,
+            completionTokens = result.usage?.completionTokens,
+            totalTokens = result.usage?.totalTokens,
+            decodingSpeedTps = result.usage?.decodingSpeedTps,
+            prefillSpeedTps = result.usage?.prefillSpeedTps,
+            activeKvTokens = result.usage?.activeKvTokens,
+            maxKvTokenCapacity = result.usage?.maxKvTokenCapacity
+        )
+
+        updateConversationTitleIfNeeded(conversationId)
+        return Result.success(assistantMessage)
     }
 
     data class SiblingInfo(
@@ -636,6 +665,10 @@ class ChatRepository(
         }
     }
 
+    // U+3000（全角スペース）は FLM checkpoint 照合のキャッシュミス主因の1つ。
+    // 送信時のみ正規化する（DB・表示は変更しない）。一貫適用する限り履歴整合は崩れない
+    private fun String.normalizeForApi(): String = replace('　', ' ')
+
     private suspend fun buildApiMessages(
         conversationId: Long,
         imageAttachments: List<ProcessedAttachment.ImageAttachment>,
@@ -664,7 +697,7 @@ class ChatRepository(
                 msg.role == "tool" -> {
                     ApiChatMessage(
                         role = "tool",
-                        content = MessageContent.Text(msg.content),
+                        content = MessageContent.Text(msg.content.normalizeForApi()),
                         toolCallId = msg.toolCallId
                     )
                 }
@@ -676,18 +709,20 @@ class ChatRepository(
                     )
                     ApiChatMessage(
                         role = "assistant",
-                        content = if (msg.content.isNotEmpty()) MessageContent.Text(msg.content) else null,
+                        content = if (msg.content.isNotEmpty()) MessageContent.Text(msg.content.normalizeForApi()) else null,
                         toolCalls = toolCalls
                     )
                 }
                 // Normal assistant message
                 msg.role == "assistant" -> {
                     val sourceText = if (msg.isSummarized && msg.summaryText != null) msg.summaryText else msg.content
+                    // <think> 除去 + trim は生成実物とのズレを生むため、thinking を出すモデル（qwen系）では
+                    // ターン毎にキャッシュミス1回分の宿命。e4b（thinking なし運用）では実害なし
                     val content = sourceText
                         .replace(Regex("<think>[\\s\\S]*?</think>"), "")
                         .replace(Regex("^[\\s\\S]*?</think>"), "")
                         .trim()
-                    ApiChatMessage(role = msg.role, content = MessageContent.Text(content))
+                    ApiChatMessage(role = msg.role, content = MessageContent.Text(content.normalizeForApi()))
                 }
                 // Last user message with image attachments
                 isLastUserMessage && imageAttachments.isNotEmpty() -> {
@@ -695,7 +730,7 @@ class ChatRepository(
                     val sourceText = if (msg.isSummarized && msg.summaryText != null) msg.summaryText else msg.content
                     val cleanedText = sourceText.replace(Regex("\\n\\n\\[画像添付: [^\\]]+\\]$"), "")
                     if (cleanedText.isNotBlank()) {
-                        parts.add(ContentPart.TextPart(cleanedText))
+                        parts.add(ContentPart.TextPart(cleanedText.normalizeForApi()))
                     }
                     imageAttachments.forEach { img ->
                         parts.add(ContentPart.ImageUrlPart(
@@ -707,13 +742,13 @@ class ChatRepository(
                 // Normal user message
                 else -> {
                     val sourceText = if (msg.isSummarized && msg.summaryText != null) msg.summaryText else msg.content
-                    ApiChatMessage(role = msg.role, content = MessageContent.Text(sourceText))
+                    ApiChatMessage(role = msg.role, content = MessageContent.Text(sourceText.normalizeForApi()))
                 }
             }
         }
 
         return if (systemPrompt.isNotBlank()) {
-            listOf(ApiChatMessage(role = "system", content = MessageContent.Text(systemPrompt))) + apiMessages
+            listOf(ApiChatMessage(role = "system", content = MessageContent.Text(systemPrompt.normalizeForApi()))) + apiMessages
         } else {
             apiMessages
         }
@@ -831,6 +866,7 @@ class ChatRepository(
     suspend fun translateMessage(messageId: Long, content: String): Result<String> {
         return try {
             val baseUrl = settingsRepository.baseUrl.first()
+            val modelName = settingsRepository.modelName.first()
             val api = ApiClient.getChatApi(baseUrl)
 
             // Strip <think>...</think> tags from content before translating
@@ -851,7 +887,7 @@ class ChatRepository(
             }
 
             val request = ChatRequest(
-                model = "translategemma:4b",
+                model = modelName,
                 messages = listOf(
                     ChatMessage(role = "user", content = translationPrompt)
                 ),
@@ -866,7 +902,11 @@ class ChatRepository(
                 }
             }
 
-            val translatedText = response.choices.firstOrNull()?.message?.content?.trim() ?: ""
+            // Chat models with thinking (e.g. qwen) may prepend <think> to the translation
+            val translatedText = (response.choices.firstOrNull()?.message?.content ?: "")
+                .replace(Regex("<think>[\\s\\S]*?</think>"), "")
+                .replace(Regex("^[\\s\\S]*?</think>"), "")
+                .trim()
 
             if (translatedText.isBlank()) {
                 return Result.failure(Exception("翻訳結果が空です"))

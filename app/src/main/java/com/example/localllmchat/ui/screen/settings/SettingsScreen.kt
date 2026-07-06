@@ -39,6 +39,7 @@ import com.example.localllmchat.data.repository.SettingsRepository
 private val PRESET_MODELS = listOf(
     "gemma3:4b",
     "gemma4-it:e2b",
+    "gemma4-it:e4b",
     "lfm2.5-it:1.2b",
     "lfm2.5-tk:1.2b",
     "qwen3.5:0.8b",
@@ -146,6 +147,27 @@ fun SettingsScreen(
 
             Text(
                 text = "Maximum tokens for context (default: 32768)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedTextField(
+                value = uiState.maxAttachmentTextKb.toString(),
+                onValueChange = { viewModel.updateMaxAttachmentTextKb(it) },
+                label = { Text("添付テキスト上限 (KB)") },
+                placeholder = { Text("60") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+
+            Text(
+                text = "既定 60KB（約16Kトークン = 32Kコンテキストの半分。gemma4-it:e4b で位置参照の品質検証済み）。" +
+                    "大きい添付は全量 prefill になり応答開始まで約30秒かかります（60KB実測）。" +
+                    "さらに上げる場合はコンテキスト残量と品質を実機で確認してから。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 modifier = Modifier.padding(top = 4.dp)

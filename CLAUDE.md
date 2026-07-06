@@ -1,7 +1,9 @@
 # LocalLLMChat
 
 ## プロジェクト概要
-Kotlin / Jetpack Compose の Android チャットアプリ。端末の NPU 上で動作する FastFlowLM（OpenAI 互換 API）と SSE ストリーミング通信し、ローカル LLM とリアルタイムに会話できる。
+Kotlin / Jetpack Compose の Android チャットアプリ。PC の NPU 上で動作する FastFlowLM（OpenAI 互換 API）と Tailscale 経由で SSE ストリーミング通信し、ローカル LLM とリアルタイムに会話できる。
+
+サーバー側環境（FastFlowLM v0.9.43 / 主力モデル gemma4-it:e4b / NPU 7.6GB 制約 / KV キャッシュ挙動）の詳細は `.claude/skills/local-ai-env-ref/` を参照。環境判定はメモリの旧記述よりこのスキルを優先すること。
 
 ## ビルド・実行手順
 
@@ -32,6 +34,14 @@ Kotlin / Jetpack Compose の Android チャットアプリ。端末の NPU 上�
 - ストリーミング中の不完全タグは `cleanupIncompleteThinkTags()` で修正
 - 要約レスポンスからも `<think>` タグを除去（モデル非依存）
 
+### キャッシュ親和性（FLM checkpoint 照合）
+- `buildApiMessages()` は送信時のみ U+3000 → 半角スペース正規化（`normalizeForApi()`。DB・表示は変更しない）
+- 履歴を書き換える操作（除外トグル・要約適用・ブランチ切替・編集/再生成・ツールON/OFF）の次ターンは全量 prefill → Snackbar でヒント表示
+- assistant 履歴の `<think>` 除去 + trim は生成実物とのズレ → thinking を出すモデル（qwen系）では毎ターンキャッシュミス1回分の宿命。qwen 系で「毎ターン遅い」と感じたらこれが原因（e4b では実害なし、対応不要）
+
+### Tool Calling
+- ツール実行は最大 `MAX_TOOL_ROUNDS`(=3) ラウンドまでループ（`ChatRepository.generateResponse()`）。カウントは全ツール共通のラウンド数（1応答に複数 tool_calls でも1ラウンド）。上限到達後の tool_calls は実行されずテキスト扱いで打ち切り（暴走防止）。本文が空なら打ち切り文言を保存（空バブル防止）
+
 ### メッセージ除外機能
 - `ChatRepository.sendMessage()` の履歴構築時に `isExcluded` でフィルタ（要約チェックの前段階）
 - `SessionTokenCounter` は除外メッセージのトークンを集計から除外
@@ -43,7 +53,8 @@ Kotlin / Jetpack Compose の Android チャットアプリ。端末の NPU 上�
 - 履歴構築時: `isSummarized == true` なら `summaryText` を API に送信
 
 ### DB マイグレーション
-- 現在 version 4。新しいカラム追加時は `AppDatabase.kt` に Migration を追加すること
+- 現在 version 9（4→5 翻訳、5→6 tool calling、6→7 ブランチ、7→8 要約設定、8→9 プリセット）
+- 新しいカラム追加時は `AppDatabase.kt` に Migration を追加すること
 
 ### DI
 - Hilt/Dagger 不使用。`LocalLLMChatApp` で手動シングルトン生成

@@ -24,19 +24,19 @@ sealed class ProcessedAttachment {
 }
 
 object FileProcessor {
-    private const val MAX_TEXT_BYTES = 28 * 1024 // 28KB
-    private const val MAX_IMAGE_DIMENSION = 1024
+    private const val MAX_IMAGE_DIMENSION = 2048
 
     fun processFile(
         contentResolver: ContentResolver,
         uri: Uri,
         fileName: String,
-        mimeType: String
+        mimeType: String,
+        maxTextBytes: Int
     ): ProcessedAttachment {
         return if (mimeType.startsWith("image/")) {
             processImage(contentResolver, uri, fileName, mimeType)
         } else {
-            processTextFile(contentResolver, uri, fileName, mimeType)
+            processTextFile(contentResolver, uri, fileName, mimeType, maxTextBytes)
         }
     }
 
@@ -44,15 +44,16 @@ object FileProcessor {
         contentResolver: ContentResolver,
         uri: Uri,
         fileName: String,
-        mimeType: String
+        mimeType: String,
+        maxTextBytes: Int
     ): ProcessedAttachment.TextAttachment {
         val inputStream = contentResolver.openInputStream(uri)
             ?: throw IllegalStateException("Cannot open file: $fileName")
 
         inputStream.use { stream ->
             val bytes = stream.readBytes()
-            val wasTruncated = bytes.size > MAX_TEXT_BYTES
-            val effectiveBytes = if (wasTruncated) bytes.copyOf(MAX_TEXT_BYTES) else bytes
+            val wasTruncated = bytes.size > maxTextBytes
+            val effectiveBytes = if (wasTruncated) bytes.copyOf(maxTextBytes) else bytes
             val content = String(effectiveBytes, Charsets.UTF_8)
             return ProcessedAttachment.TextAttachment(fileName, mimeType, content, wasTruncated)
         }
@@ -86,7 +87,7 @@ object FileProcessor {
         val outputStream = ByteArrayOutputStream()
         val compressFormat = if (mimeType == "image/png")
             Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
-        bitmap.compress(compressFormat, 85, outputStream)
+        bitmap.compress(compressFormat, 95, outputStream)
 
         if (bitmap !== originalBitmap) bitmap.recycle()
         originalBitmap.recycle()

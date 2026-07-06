@@ -25,3 +25,4 @@ local.properties
 
 # Windows reserved device name (empty file artifact)
 nul
+docs/

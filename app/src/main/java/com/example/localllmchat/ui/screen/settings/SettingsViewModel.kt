@@ -14,6 +14,7 @@ data class SettingsUiState(
     val modelName: String = SettingsRepository.DEFAULT_MODEL_NAME,
     val contextWindowSize: Int = SettingsRepository.DEFAULT_CONTEXT_WINDOW_SIZE,
     val systemPrompt: String = SettingsRepository.DEFAULT_SYSTEM_PROMPT,
+    val maxAttachmentTextKb: Int = SettingsRepository.DEFAULT_MAX_ATTACHMENT_TEXT_KB,
     val isSaving: Boolean = false,
     val saveSuccess: Boolean = false
 )
@@ -50,6 +51,11 @@ class SettingsViewModel(
                 _uiState.value = _uiState.value.copy(systemPrompt = prompt)
             }
         }
+        viewModelScope.launch {
+            settingsRepository.maxAttachmentTextKb.collect { kb ->
+                _uiState.value = _uiState.value.copy(maxAttachmentTextKb = kb)
+            }
+        }
     }
 
     fun updateBaseUrl(url: String) {
@@ -69,6 +75,12 @@ class SettingsViewModel(
         _uiState.value = _uiState.value.copy(systemPrompt = prompt, saveSuccess = false)
     }
 
+    fun updateMaxAttachmentTextKb(value: String) {
+        val kb = (value.toIntOrNull() ?: SettingsRepository.DEFAULT_MAX_ATTACHMENT_TEXT_KB)
+            .coerceAtLeast(1)
+        _uiState.value = _uiState.value.copy(maxAttachmentTextKb = kb, saveSuccess = false)
+    }
+
     fun saveSettings() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSaving = true)
@@ -76,7 +88,8 @@ class SettingsViewModel(
                 baseUrl = _uiState.value.baseUrl,
                 modelName = _uiState.value.modelName,
                 contextWindowSize = _uiState.value.contextWindowSize,
-                systemPrompt = _uiState.value.systemPrompt
+                systemPrompt = _uiState.value.systemPrompt,
+                maxAttachmentTextKb = _uiState.value.maxAttachmentTextKb
             )
             _uiState.value = _uiState.value.copy(isSaving = false, saveSuccess = true)
         }

@@ -22,6 +22,11 @@ data class AskUserDialogState(
     val deferred: CompletableDeferred<String>
 )
 
+data class CapacityWarning(
+    val projected: Int,
+    val capacity: Int
+)
+
 data class ChatUiState(
     val conversation: ConversationEntity? = null,
     val messages: List<MessageEntity> = emptyList(),
@@ -29,8 +34,12 @@ data class ChatUiState(
     val isLoading: Boolean = false,
     val error: String? = null,
     val sessionTokenCount: Int = 0,
-    val conversationTotalTokens: Int = 0, // cumulative tokens across all turns in this chat
+    val conversationTotalTokens: Int = 0, // measured active_kv_tokens, or estimated cumulative tokens as fallback
     val contextWindowSize: Int = SettingsRepository.DEFAULT_CONTEXT_WINDOW_SIZE,
+    val maxAttachmentTextKb: Int = SettingsRepository.DEFAULT_MAX_ATTACHMENT_TEXT_KB,
+    val measuredKvCapacity: Int? = null, // max_kv_token_capacity from FLM (overrides contextWindowSize when present)
+    val isFullPrefill: Boolean = false, // last turn was a full prefill (cache miss)
+    val capacityWarning: CapacityWarning? = null,
     val textAttachment: ProcessedAttachment.TextAttachment? = null,
     val imageAttachments: List<ProcessedAttachment.ImageAttachment> = emptyList(),
     val attachmentWarning: String? = null,
@@ -96,6 +105,11 @@ class ChatViewModel(
                 _uiState.value = _uiState.value.copy(contextWindowSize = size)
             }
         }
+        viewModelScope.launch {
+            settingsRepository.maxAttachmentTextKb.collect { kb ->
+                _uiState.value = _uiState.value.copy(maxAttachmentTextKb = kb)
+            }
+        }
     }
 
     private fun loadToolState() {
@@ -131,7 +145,35 @@ class ChatViewModel(
         val activeMessages = messages.filter { !it.isExcluded }
         val lastAssistantMessage = activeMessages.lastOrNull { it.role == "assistant" }
         val lastTurnTokens = lastAssistantMessage?.totalTokens ?: 0
-        // Sum total_tokens from all non-excluded assistant messages for cumulative count
+
+        // Prefer measured KV values (FLM v0.9.41+ stream final chunk).
+        // Exclusion flags are ignored here: activeKvTokens records the server-side KV
+        // state at generation time, regardless of what is excluded now.
+        val kvMessages = messages.filter { it.role == "assistant" && it.activeKvTokens != null }
+        val latestKvMessage = kvMessages.lastOrNull()
+        if (latestKvMessage != null) {
+            val activeKv = latestKvMessage.activeKvTokens!!
+            val prevKv = kvMessages.getOrNull(kvMessages.size - 2)?.activeKvTokens
+            // Full prefill (cache miss) detection: on a hit prompt_tokens covers only the
+            // newly added tokens, so prompt + completion + prevKv ≈ activeKv. On a miss the
+            // whole history is re-prefilled (prompt_tokens ≈ activeKv - completion), leaving
+            // a surplus of roughly prevKv. Small histories (< 100 tokens) are skipped: a full
+            // prefill there is cheap and the margin is too noisy to judge.
+            val prompt = latestKvMessage.promptTokens
+            val completion = latestKvMessage.completionTokens ?: 0
+            val isFullPrefill = prevKv != null && prevKv >= 100 && prompt != null &&
+                latestKvMessage === messages.lastOrNull { it.role == "assistant" } &&
+                (prompt + completion + prevKv - activeKv) >= prevKv * 0.5
+            _uiState.value = _uiState.value.copy(
+                sessionTokenCount = lastTurnTokens,
+                conversationTotalTokens = activeKv,
+                measuredKvCapacity = latestKvMessage.maxKvTokenCapacity,
+                isFullPrefill = isFullPrefill
+            )
+            return
+        }
+
+        // Fallback (old data / servers without KV fields): estimate from cumulative totals
         var cumulativeTokens = activeMessages.filter { it.role == "assistant" }.sumOf { it.totalTokens ?: 0 }
         // Subtract token reductions from summarized messages
         activeMessages.filter { it.isSummarized && it.summarizeConfigJson != null }.forEach { msg ->
@@ -146,7 +188,9 @@ class ChatViewModel(
         }
         _uiState.value = _uiState.value.copy(
             sessionTokenCount = lastTurnTokens,
-            conversationTotalTokens = cumulativeTokens.coerceAtLeast(0)
+            conversationTotalTokens = cumulativeTokens.coerceAtLeast(0),
+            measuredKvCapacity = null,
+            isFullPrefill = false
         )
     }
 
@@ -158,7 +202,7 @@ class ChatViewModel(
         when (attachment) {
             is ProcessedAttachment.TextAttachment -> {
                 val warning = if (attachment.wasTruncated)
-                    "ファイルが28KBを超えています。先頭部分のみ送信します。" else null
+                    "ファイルが${_uiState.value.maxAttachmentTextKb}KBを超えています。先頭部分のみ送信します。" else null
                 _uiState.value = _uiState.value.copy(
                     textAttachment = attachment, attachmentWarning = warning
                 )
@@ -200,6 +244,22 @@ class ChatViewModel(
         val textAttachment = _uiState.value.textAttachment
         val imageAttachments = _uiState.value.imageAttachments
         if (message.isEmpty() && textAttachment == null && imageAttachments.isEmpty()) return
+
+        // 容量超過ガード: 実測 KV 容量があるときのみ、予測トークン量が上限に達しそうなら送信を止める
+        // （容量超過の prefill 強行は FLM の checkpoint を全滅させ復旧不能になるため）
+        val state = _uiState.value
+        val capacity = state.measuredKvCapacity
+        if (capacity != null) {
+            val estimatedInput =
+                ((message.length + (textAttachment?.content?.length ?: 0)) * 0.9).toInt() +
+                    imageAttachments.sumOf { it.base64Data.length * 3 / 8 } // base64長×3/4=バイト数、その1/2
+            val projected = state.conversationTotalTokens + estimatedInput + MAX_COMPLETION_TOKENS
+            if (projected >= capacity) {
+                // 入力・添付はクリアしない（要約・除外で履歴を減らした後に再送できるように残す）
+                _uiState.value = state.copy(capacityWarning = CapacityWarning(projected, capacity))
+                return
+            }
+        }
 
         _uiState.value = _uiState.value.copy(
             inputText = "",
@@ -335,7 +395,7 @@ class ChatViewModel(
         viewModelScope.launch {
             chatRepository.saveSummary(messageId, preview.summaryText, preview.config)
 
-            val toast = "要約完了！ ${preview.originalTokens} → ${preview.summaryTokens} トークン"
+            val toast = "要約完了！ ${preview.originalTokens} → ${preview.summaryTokens} トークン（次の応答は履歴の再読み込みで時間がかかります）"
             _uiState.value = _uiState.value.copy(
                 summarizeToast = toast
             )
@@ -351,7 +411,10 @@ class ChatViewModel(
             val result = chatRepository.translateMessage(messageId, content)
             result.fold(
                 onSuccess = {
-                    _uiState.value = _uiState.value.copy(translatingMessageId = null)
+                    _uiState.value = _uiState.value.copy(
+                        translatingMessageId = null,
+                        summarizeToast = "翻訳完了。次の応答は履歴の再読み込みで時間がかかることがあります"
+                    )
                 },
                 onFailure = { e ->
                     _uiState.value = _uiState.value.copy(
@@ -366,6 +429,7 @@ class ChatViewModel(
     fun toggleExcludeMessage(messageId: Long, currentlyExcluded: Boolean) {
         viewModelScope.launch {
             chatRepository.excludeMessage(messageId, !currentlyExcluded)
+            _uiState.value = _uiState.value.copy(summarizeToast = HISTORY_RELOAD_HINT)
         }
     }
 
@@ -374,6 +438,7 @@ class ChatViewModel(
             messageIds.forEach { id ->
                 chatRepository.excludeMessage(id, !currentlyExcluded)
             }
+            _uiState.value = _uiState.value.copy(summarizeToast = HISTORY_RELOAD_HINT)
         }
     }
 
@@ -383,6 +448,10 @@ class ChatViewModel(
 
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    fun dismissCapacityWarning() {
+        _uiState.value = _uiState.value.copy(capacityWarning = null)
     }
 
     fun answerAskUserQuestion(answer: String) {
@@ -533,7 +602,16 @@ class ChatViewModel(
     fun switchBranch(targetMessageId: Long) {
         viewModelScope.launch {
             chatRepository.switchBranch(conversationId, targetMessageId)
+            _uiState.value = _uiState.value.copy(summarizeToast = HISTORY_RELOAD_HINT)
         }
+    }
+
+    companion object {
+        // ChatRequest.maxTokens (8192) と同値。応答生成分を projected に含めるための保守値
+        private const val MAX_COMPLETION_TOKENS = 8192
+
+        // 履歴を書き換える操作は FLM checkpoint 照合を外し、次ターンが全量 prefill になるため
+        private const val HISTORY_RELOAD_HINT = "※次の応答は履歴の再読み込みで時間がかかることがあります"
     }
 
     class Factory(

@@ -136,7 +136,8 @@ fun ChatScreen(
 
             try {
                 val processed = FileProcessor.processFile(
-                    context.contentResolver, it, fileName, mimeType
+                    context.contentResolver, it, fileName, mimeType,
+                    maxTextBytes = uiState.maxAttachmentTextKb * 1024
                 )
                 viewModel.addAttachment(processed)
             } catch (e: Exception) {
@@ -171,6 +172,25 @@ fun ChatScreen(
             state = dialogState,
             onAnswer = viewModel::answerAskUserQuestion,
             onCancel = viewModel::cancelAskUserQuestion
+        )
+    }
+
+    uiState.capacityWarning?.let { warning ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissCapacityWarning() },
+            title = { Text("コンテキスト容量の警告") },
+            text = {
+                Text(
+                    "送信するとコンテキスト上限を超える可能性があります" +
+                        "（予測 約${warning.projected} / 上限 ${warning.capacity} トークン）。\n" +
+                        "メッセージの要約・除外で履歴を減らしてから送信してください。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.dismissCapacityWarning() }) {
+                    Text("OK")
+                }
+            }
         )
     }
 
@@ -278,8 +298,9 @@ fun ChatScreen(
                         if (uiState.conversationTotalTokens > 0) {
                             SessionTokenCounter(
                                 currentTokens = uiState.sessionTokenCount,
-                                maxTokens = uiState.contextWindowSize,
-                                totalTokens = uiState.conversationTotalTokens
+                                maxTokens = uiState.measuredKvCapacity ?: uiState.contextWindowSize,
+                                totalTokens = uiState.conversationTotalTokens,
+                                isFullPrefill = uiState.isFullPrefill
                             )
                         }
                     }
@@ -339,8 +360,8 @@ fun ChatScreen(
                             onCancel = viewModel::cancelEdit
                         )
                     } else if (message.role == "assistant" && message.toolCallsJson != null) {
-                        val hasReasoning = message.content.contains("<think>")
-                        if (hasReasoning) {
+                        // 推論（<think>）だけでなく平文＋tool_call 混在の応答も本文を表示する
+                        if (message.content.isNotBlank()) {
                             MessageBubble(
                                 message = message,
                                 isSummarizing = false,
@@ -1162,9 +1183,10 @@ private fun ChatInput(
                     ) {
                         availableTools.forEach { toolName ->
                             val enabled = toolName !in disabledTools
-                            val description = toolDescriptions[toolName] ?: toolName
+                            // description はモデル向けに長文化したため、表示は先頭の1文のみ
+                            val label = (toolDescriptions[toolName] ?: toolName).substringBefore(". ")
                             DropdownMenuItem(
-                                text = { Text(description) },
+                                text = { Text(label) },
                                 onClick = { onToggleTool(toolName) },
                                 leadingIcon = {
                                     Checkbox(

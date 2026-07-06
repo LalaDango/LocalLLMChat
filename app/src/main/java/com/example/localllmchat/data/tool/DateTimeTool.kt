@@ -14,7 +14,7 @@ class DateTimeTool : ToolHandler {
     override val definition = ToolDefinition(
         function = FunctionDefinition(
             name = "get_datetime",
-            description = "Get the current date and time",
+            description = "Get the current date and time. The result contains datetime/date/time/day_of_week; use these values when answering the user.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(

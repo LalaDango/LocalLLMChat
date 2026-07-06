@@ -15,13 +15,6 @@ interface ChatApi {
 
     @Streaming
     @POST("v1/chat/completions")
-    suspend fun chatStream(
-        @Header("Authorization") authorization: String = "Bearer ",
-        @Body request: ChatRequest
-    ): ResponseBody
-
-    @Streaming
-    @POST("v1/chat/completions")
     suspend fun chatStreamMultimodal(
         @Header("Authorization") authorization: String = "Bearer ",
         @Body request: ApiChatRequest

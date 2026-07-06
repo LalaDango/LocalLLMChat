@@ -14,31 +14,35 @@ import java.util.Locale
 fun SessionTokenCounter(
     currentTokens: Int,
     maxTokens: Int,
-    totalTokens: Int, // cumulative tokens for the entire chat
+    totalTokens: Int, // measured active KV tokens (or estimated cumulative tokens)
+    isFullPrefill: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val numberFormat = NumberFormat.getNumberInstance(Locale.getDefault())
-    val percentage = if (maxTokens > 0) currentTokens.toFloat() / maxTokens else 0f
+    val percentage = if (maxTokens > 0) totalTokens.toFloat() / maxTokens else 0f
 
-    val turnColor = when {
+    val contextColor = when {
         percentage > 0.95f -> TokenWarningRed
         percentage > 0.80f -> TokenWarningYellow
         else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
     }
 
     Column(modifier = modifier) {
-        // Primary: cumulative token count for this chat
+        // Primary: context occupancy for this chat
         Text(
-            text = "Context: ${numberFormat.format(totalTokens)} / ${numberFormat.format(maxTokens)} tokens",
+            text = buildString {
+                append("Context: ${numberFormat.format(totalTokens)} / ${numberFormat.format(maxTokens)} tokens")
+                if (isFullPrefill) append("  ⟳ full prefill")
+            },
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            color = contextColor
         )
         // Secondary: last turn usage vs context window
         if (currentTokens > 0) {
             Text(
                 text = "This turn: ${numberFormat.format(currentTokens)} / ${numberFormat.format(maxTokens)}",
                 style = MaterialTheme.typography.labelSmall,
-                color = turnColor
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
             )
         }
     }

@@ -45,6 +45,9 @@ fun TokenInfoDialog(
                 message.prefillSpeedTps?.let {
                     TokenInfoRow("Prefill speed", String.format(Locale.getDefault(), "%.1f t/s", it))
                 }
+                message.activeKvTokens?.let {
+                    TokenInfoRow("Active KV", numberFormat.format(it))
+                }
             }
         },
         confirmButton = {

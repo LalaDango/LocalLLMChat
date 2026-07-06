@@ -21,11 +21,13 @@ class SettingsRepository(private val context: Context) {
         private val CONTEXT_WINDOW_SIZE_KEY = intPreferencesKey("context_window_size")
         private val SYSTEM_PROMPT_KEY = stringPreferencesKey("system_prompt")
         private val DISABLED_TOOLS_KEY = stringSetPreferencesKey("disabled_tools")
+        private val MAX_ATTACHMENT_TEXT_KB_KEY = intPreferencesKey("max_attachment_text_kb")
 
         const val DEFAULT_BASE_URL = "http://localhost:8080"
-        const val DEFAULT_MODEL_NAME = "qwen3.5:4b"
-        const val DEFAULT_CONTEXT_WINDOW_SIZE = 16384
+        const val DEFAULT_MODEL_NAME = "gemma4-it:e4b"
+        const val DEFAULT_CONTEXT_WINDOW_SIZE = 32768
         const val DEFAULT_SYSTEM_PROMPT = ""
+        const val DEFAULT_MAX_ATTACHMENT_TEXT_KB = 60
     }
 
     val baseUrl: Flow<String> = context.dataStore.data.map { preferences ->
@@ -46,6 +48,10 @@ class SettingsRepository(private val context: Context) {
 
     val disabledTools: Flow<Set<String>> = context.dataStore.data.map { preferences ->
         preferences[DISABLED_TOOLS_KEY] ?: emptySet()
+    }
+
+    val maxAttachmentTextKb: Flow<Int> = context.dataStore.data.map { preferences ->
+        preferences[MAX_ATTACHMENT_TEXT_KB_KEY] ?: DEFAULT_MAX_ATTACHMENT_TEXT_KB
     }
 
     suspend fun saveBaseUrl(url: String) {
@@ -72,12 +78,13 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveSettings(baseUrl: String, modelName: String, contextWindowSize: Int, systemPrompt: String) {
+    suspend fun saveSettings(baseUrl: String, modelName: String, contextWindowSize: Int, systemPrompt: String, maxAttachmentTextKb: Int) {
         context.dataStore.edit { preferences ->
             preferences[BASE_URL_KEY] = baseUrl
             preferences[MODEL_NAME_KEY] = modelName
             preferences[CONTEXT_WINDOW_SIZE_KEY] = contextWindowSize
             preferences[SYSTEM_PROMPT_KEY] = systemPrompt
+            preferences[MAX_ATTACHMENT_TEXT_KB_KEY] = maxAttachmentTextKb
         }
     }
 }
