@@ -24,7 +24,7 @@ sealed class ProcessedAttachment {
 }
 
 object FileProcessor {
-    private const val MAX_IMAGE_DIMENSION = 2048
+    private const val MAX_IMAGE_DIMENSION = 1024
 
     fun processFile(
         contentResolver: ContentResolver,
@@ -87,7 +87,7 @@ object FileProcessor {
         val outputStream = ByteArrayOutputStream()
         val compressFormat = if (mimeType == "image/png")
             Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
-        bitmap.compress(compressFormat, 95, outputStream)
+        bitmap.compress(compressFormat, 85, outputStream)
 
         if (bitmap !== originalBitmap) bitmap.recycle()
         originalBitmap.recycle()
