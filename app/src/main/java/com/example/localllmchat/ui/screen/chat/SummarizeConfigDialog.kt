@@ -34,6 +34,7 @@ fun SummarizeConfigDialog(
     initialConfig: SummarizeConfig?,
     preview: ChatRepository.SummarizeResult?,
     isLoading: Boolean,
+    errorMessage: String? = null,
     onGenerate: (SummarizeConfig) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
@@ -125,6 +126,14 @@ fun SummarizeConfigDialog(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
                     }
+                }
+
+                if (errorMessage != null && !isLoading) {
+                    Text(
+                        errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
             }
         },

@@ -23,7 +23,8 @@ object ApiClient {
         }
         OkHttpClient.Builder()
             .addInterceptor(logging)
-            .connectTimeout(60, TimeUnit.SECONDS)
+            // 接続確立のみに適用（Prefill の遅さは readTimeout 側）。Tailscale のアイドル復帰マージン込みで15秒
+            .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(300, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()

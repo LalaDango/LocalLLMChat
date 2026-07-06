@@ -199,6 +199,7 @@ fun ChatScreen(
             initialConfig = uiState.summarizeInitialConfig,
             preview = uiState.summarizePreview,
             isLoading = uiState.isSummarizePreviewLoading,
+            errorMessage = uiState.summarizePreviewError,
             onGenerate = { config -> viewModel.generateSummarizePreview(config) },
             onConfirm = { viewModel.confirmSummarizePreview() },
             onDismiss = { viewModel.closeSummarizeDialog() }

@@ -1,5 +1,6 @@
 package com.example.localllmchat.ui.screen.chat
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -50,6 +51,7 @@ data class ChatUiState(
     val summarizeTargetContent: String? = null,
     val summarizePreview: ChatRepository.SummarizeResult? = null,
     val isSummarizePreviewLoading: Boolean = false,
+    val summarizePreviewError: String? = null,
     val summarizeInitialConfig: SummarizeConfig? = null,
     val summarizeToast: String? = null,
     val translatingMessageId: Long? = null,
@@ -317,7 +319,7 @@ class ChatViewModel(
                         streamingContent = "",
                         streamingReasoning = "",
                         toolExecutionStatus = null,
-                        error = e.message ?: "An error occurred"
+                        error = toUserErrorMessage(e)
                     )
                 }
             )
@@ -331,6 +333,7 @@ class ChatViewModel(
             summarizeTargetContent = content,
             summarizePreview = null,
             isSummarizePreviewLoading = false,
+            summarizePreviewError = null,
             summarizeInitialConfig = null
         )
     }
@@ -345,6 +348,7 @@ class ChatViewModel(
             summarizeTargetContent = content,
             summarizePreview = null,
             isSummarizePreviewLoading = false,
+            summarizePreviewError = null,
             summarizeInitialConfig = prevConfig
         )
     }
@@ -356,6 +360,7 @@ class ChatViewModel(
             summarizeTargetContent = null,
             summarizePreview = null,
             isSummarizePreviewLoading = false,
+            summarizePreviewError = null,
             summarizeInitialConfig = null
         )
     }
@@ -366,7 +371,8 @@ class ChatViewModel(
 
         _uiState.value = _uiState.value.copy(
             isSummarizePreviewLoading = true,
-            summarizePreview = null
+            summarizePreview = null,
+            summarizePreviewError = null
         )
 
         viewModelScope.launch {
@@ -381,7 +387,8 @@ class ChatViewModel(
                 onFailure = { e ->
                     _uiState.value = _uiState.value.copy(
                         isSummarizePreviewLoading = false,
-                        error = "要約プレビューに失敗しました: ${e.message}"
+                        // Snackbar はダイアログのスクリムに隠れるためダイアログ内に表示する
+                        summarizePreviewError = "要約に失敗しました: ${toUserErrorMessage(e)}"
                     )
                 }
             )
@@ -419,7 +426,7 @@ class ChatViewModel(
                 onFailure = { e ->
                     _uiState.value = _uiState.value.copy(
                         translatingMessageId = null,
-                        error = "翻訳に失敗しました: ${e.message}"
+                        error = "翻訳に失敗しました: ${toUserErrorMessage(e)}"
                     )
                 }
             )
@@ -514,7 +521,7 @@ class ChatViewModel(
                         streamingContent = "",
                         streamingReasoning = "",
                         toolExecutionStatus = null,
-                        error = e.message ?: "An error occurred"
+                        error = toUserErrorMessage(e)
                     )
                 }
             )
@@ -592,10 +599,35 @@ class ChatViewModel(
                         streamingContent = "",
                         streamingReasoning = "",
                         toolExecutionStatus = null,
-                        error = e.message ?: "An error occurred"
+                        error = toUserErrorMessage(e)
                     )
                 }
             )
+        }
+    }
+
+    private fun toUserErrorMessage(e: Throwable): String {
+        Log.w("ChatViewModel", "API error", e)
+        return when (e) {
+            is java.net.ConnectException ->
+                "サーバーに接続できません。FLM Serve と Tailscale を確認してください"
+            is java.net.UnknownHostException ->
+                "サーバーが見つかりません。Base URL と Tailscale 接続を確認してください"
+            is java.net.SocketTimeoutException ->
+                // OkHttp は接続不能ホストへの connect timeout も SocketTimeoutException で投げる
+                if (e.message?.contains("connect", ignoreCase = true) == true)
+                    "サーバーに接続できません。FLM Serve と Tailscale を確認してください"
+                else
+                    "応答がタイムアウトしました（長文の読み込み中かもしれません）"
+            is retrofit2.HttpException -> when (e.code()) {
+                400 -> "リクエストが不正です（400）。コンテキスト容量超過の可能性があります"
+                404 -> "エンドポイントが見つかりません（404）。Base URL とモデル名を確認してください"
+                500, 502, 503 -> "サーバーエラー（${e.code()}）。FLM Serve の状態を確認してください"
+                else -> "HTTPエラー（${e.code()}）が発生しました"
+            }
+            is java.io.IOException ->
+                "通信エラーが発生しました。ネットワーク接続を確認してください"
+            else -> e.message ?: "エラーが発生しました"
         }
     }
 
