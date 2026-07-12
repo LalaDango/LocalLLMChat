@@ -80,4 +80,7 @@ dependencies {
 
     // Debug
     debugImplementation(libs.androidx.ui.tooling)
+
+    // Test (JVM unit tests)
+    testImplementation(libs.junit)
 }

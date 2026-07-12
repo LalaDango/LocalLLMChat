@@ -24,6 +24,7 @@ import com.example.localllmchat.data.remote.ToolDefinition
 import com.example.localllmchat.data.remote.UsageResponse
 import com.example.localllmchat.data.tool.ToolRegistry
 import com.example.localllmchat.util.ProcessedAttachment
+import com.example.localllmchat.util.ToolFragmentSanitizer
 import com.example.localllmchat.data.model.LengthPreset
 import com.example.localllmchat.data.model.SummarizeConfig
 import com.example.localllmchat.data.remote.ChatMessage
@@ -1115,40 +1116,24 @@ class ChatRepository(
         }
     }
 
-    // 捏造断片 strip（v3要件④・gemma4系×ツール有効ターン限定）:
-    // 生成が <|tool_call> 終端で止まらず、架空の tool_response（"User selected: ..." 等）→自作判定→
-    // 次問まで書き続ける暴走の断片が content デルタに漏れる（FLM v0.9.45 実測）。
-    // 最初のマーカー位置から末尾までを切除する。疑似タグは正規コンテンツに出現しないため無条件、
-    // "response:" は一般語のため同一応答に tool_calls がある場合のみ行頭 JSON 形を対象とする。
-    // マーカー無しの平文捏造は対象外（max_tokens 保険とハーネス[C5]で監視する役割分担）。
+    // 捏造断片 strip（v3要件④・gemma4系×ツール有効ターン限定）。
+    // マーカー仕様と実測根拠は ToolFragmentSanitizer 参照（純関数・JVMユニットテストで
+    // 実測断片の実物を両方向固定済み）。マーカー無しの平文捏造は対象外
+    // （max_tokens 保険とハーネス[C5]で監視する役割分担）。
     // DB 保存前の不可逆切除なので、保存経路では切除長＋先頭50字を Log.w に残す（誤爆の事後診断用）
-    // <|" は疑似クオートトークン <|"|> の先頭（2026-07-12 ハーネス[B]で実測した漏れ断片に含まれる）
-    private val fabricatedTagRegex =
-        Regex("""<\|tool_response|<\|tool_call|<\|"|</tool_|<tool_response>""")
-    // 実測シグネチャは `response:ask_user_question{...}` 形（response: の直後にツール名が来る）。
-    // JSON 直開きの `response:{` / `response:"` 形も併せて対象にする
-    private val fabricatedResponseLineRegex =
-        Regex("""^response:\s*(?:[{"]|\w+\s*\{)""", RegexOption.MULTILINE)
-
     private fun stripFabricatedToolFragments(
         text: String,
         hasToolCalls: Boolean,
         quiet: Boolean = false
     ): String {
-        var cutIndex = fabricatedTagRegex.find(text)?.range?.first ?: -1
-        if (hasToolCalls) {
-            val respIndex = fabricatedResponseLineRegex.find(text)?.range?.first ?: -1
-            if (respIndex >= 0 && (cutIndex < 0 || respIndex < cutIndex)) cutIndex = respIndex
-        }
-        if (cutIndex < 0) return text
-        if (!quiet) {
-            val removed = text.substring(cutIndex)
+        val result = ToolFragmentSanitizer.strip(text, hasToolCalls)
+        if (result.removed != null && !quiet) {
             Log.w(
                 "ChatRepository",
-                "Fabricated tool fragment stripped: ${removed.length} chars, head='${removed.take(50)}'"
+                "Fabricated tool fragment stripped: ${result.removed.length} chars, head='${result.removed.take(50)}'"
             )
         }
-        return text.substring(0, cutIndex).trimEnd()
+        return result.cleaned
     }
 
     private fun cleanupIncompleteThinkTags(text: String): String {
