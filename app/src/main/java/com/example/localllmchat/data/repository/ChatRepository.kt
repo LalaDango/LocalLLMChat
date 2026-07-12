@@ -732,9 +732,12 @@ class ChatRepository(
             (toolsEnabled || (msg.role != "tool" && msg.toolCallsJson == null))
         }
 
-        // gemma4系: role:"tool" が FLM のテンプレートでモデルに届かないため送信時のみ変換する。
+        // v2フォールバック: role:"tool" がテンプレートでモデルに届かないモデル向けの送信時変換
+        // （2026-07-12 現在、該当モデルなし。gemma4 は生形式 v3 へ移行済み → usesV3ToolProfile）。
         // 変換は DB の行 + modelName の純関数（checkpoint 照合を崩さないため決定的であること）
         val convertToolRole = toolRegistry.requiresToolRoleConversion(modelName)
+        // v3（gemma4系）: 生 OpenAI 形式＋分割 echo＋孤児 tool ガード（FLM v0.9.45 の2バグ対策）
+        val v3Profile = toolRegistry.usesV3ToolProfile(modelName)
         val toolCallById: Map<String, ToolCall> = if (convertToolRole) {
             messages.filter { it.role == "assistant" && it.toolCallsJson != null }
                 .flatMap { msg ->
@@ -758,11 +761,15 @@ class ChatRepository(
         }
 
         val apiMessages = mutableListOf<ApiChatMessage>()
+        // v3孤児toolガード用: 直前に emit した assistant(tool_calls) の tool_call id 集合。
+        // tool 結果は発行元 assistant に隣接する場合のみ有効なので、非 tool メッセージでクリアする
+        val pendingToolCallIds = mutableSetOf<String>()
         var i = 0
         while (i < messages.size) {
             val msg = messages[i]
+            if (msg.role != "tool") pendingToolCallIds.clear()
 
-            // gemma4系: 連続する tool メッセージを1つの user メッセージにマージ
+            // v2変換: 連続する tool メッセージを1つの user メッセージにマージ
             // （gemma テンプレートの user/assistant 交互制約対策）。
             // 呼び出し情報（name+args）もこちらに含める。assistant 側に書式を残すと
             // モデルが平文で模倣する（2026-07-07 実機確認）ため、報告形の書式で user 側に置く。
@@ -792,7 +799,7 @@ class ChatRepository(
                 continue
             }
 
-            // gemma4系: assistant の tool_calls は送らない。畳み込みテキストも置かない
+            // v2変換: assistant の tool_calls は送らない。畳み込みテキストも置かない
             // （assistant 履歴に書式があると模倣のコピー元になる）。本文が空ならメッセージごとスキップ
             if (convertToolRole && msg.role == "assistant" && msg.toolCallsJson != null) {
                 if (msg.content.isNotEmpty()) {
@@ -800,6 +807,80 @@ class ChatRepository(
                         ApiChatMessage(role = "assistant", content = MessageContent.Text(msg.content.normalizeForApi()))
                     )
                 }
+                i++
+                continue
+            }
+
+            // v3（gemma4系）: tool_calls 付き assistant は生 OpenAI 形式で echo する。
+            // 混在（content + tool_calls）はそのまま送ると FLM v0.9.45 のバグBで再展開破損
+            // （tool 結果追従 3/3 失敗）するため、text-only → tool_calls-only の2連続 assistant に
+            // 分割する（assistant 連続はシロ確定 n=20）。content の全剥がしはジャンル固着
+            // （判定スキップ＋捏造連鎖 3/3）のため禁止。text 側は verbatim（normalize のみ）
+            if (v3Profile && msg.role == "assistant" && msg.toolCallsJson != null) {
+                val toolCalls: List<ToolCall> = gson.fromJson(
+                    msg.toolCallsJson,
+                    object : TypeToken<List<ToolCall>>() {}.type
+                )
+                val callIds = toolCalls.mapNotNull { it.id }.toSet()
+                // 宙ぶらりん tool_calls ガード（v3要件③の対）: 直後の kept 列に対応する tool 結果が
+                // 1つも無ければ tool_calls を送らず text-only に降格（本文空ならスキップ）
+                var j = i + 1
+                val foundIds = mutableSetOf<String>()
+                while (j < messages.size && messages[j].role == "tool") {
+                    messages[j].toolCallId?.let { if (it in callIds) foundIds.add(it) }
+                    j++
+                }
+                if (foundIds.isEmpty()) {
+                    Log.w(
+                        "ChatRepository",
+                        "Dangling tool_calls demoted to text-only (no matching tool results): msgId=${msg.id}. " +
+                            "生成実物と異なるecho＝以降キャッシュ不一致の可能性あり"
+                    )
+                    if (msg.content.isNotBlank()) {
+                        apiMessages.add(
+                            ApiChatMessage(role = "assistant", content = MessageContent.Text(msg.content.normalizeForApi()))
+                        )
+                    }
+                } else {
+                    if (foundIds.size < callIds.size) {
+                        Log.w(
+                            "ChatRepository",
+                            "Tool results partially missing for assistant msgId=${msg.id}: ${foundIds.size}/${callIds.size} present"
+                        )
+                    }
+                    if (msg.content.isNotBlank()) {
+                        apiMessages.add(
+                            ApiChatMessage(role = "assistant", content = MessageContent.Text(msg.content.normalizeForApi()))
+                        )
+                    }
+                    // 本文なしは tool_calls-only 1件のみ（content:null は OpenAI 慣例。
+                    // Serializer が JsonNull を出力する = probe の RAW_ASSISTANT_TOOL_CALL と同形）
+                    apiMessages.add(ApiChatMessage(role = "assistant", content = null, toolCalls = toolCalls))
+                    pendingToolCallIds.addAll(callIds)
+                }
+                i++
+                continue
+            }
+
+            // v3（gemma4系）: 孤児 tool ガード（v3要件③）。tool_calls 付き assistant 親が直前に無い
+            // tool 結果は送らない（親なしは 5/5 で結果無視・再tool_call の実測。OpenAI 仕様上も不正）
+            if (v3Profile && msg.role == "tool") {
+                val callId = msg.toolCallId
+                if (callId == null || callId !in pendingToolCallIds) {
+                    Log.w(
+                        "ChatRepository",
+                        "Orphan tool message dropped from API history: msgId=${msg.id}, toolCallId=$callId"
+                    )
+                    i++
+                    continue
+                }
+                apiMessages.add(
+                    ApiChatMessage(
+                        role = "tool",
+                        content = MessageContent.Text(msg.content.normalizeForApi()),
+                        toolCallId = callId
+                    )
+                )
                 i++
                 continue
             }

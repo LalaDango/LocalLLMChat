@@ -51,10 +51,17 @@ class ToolRegistry {
                 lower.contains("gemma4")
     }
 
-    // gemma系は FLM 経由だと role:"tool" がモデルに届かない（テンプレート実装が落とす）ため、
-    // 送信時に tool→user 変換 + tool_calls のテキスト畳み込みが必要
-    fun requiresToolRoleConversion(modelName: String): Boolean =
-        modelName.lowercase().contains("gemma4")
+    // v2フォールバック: role:"tool" が FLM のテンプレート実装に落とされるモデル向けの
+    // tool→user 変換 + tool_calls 畳み込み（送信時のみ）。gemma4 は v0.9.43 でこれに該当したが、
+    // v0.9.45 で素形式が読解可能になり生形式 v3（usesV3ToolProfile）へ移行済み（2026-07-12）。
+    // 変換ロジック本体は ChatRepository.buildApiMessages() に残置してあり、将来 v2 が必要な
+    // モデルが出たらこのリストへ部分文字列（小文字）を足すだけで再有効化できる
+    private val v2ToolRoleModels: List<String> = emptyList()
+
+    fun requiresToolRoleConversion(modelName: String): Boolean {
+        val lower = modelName.lowercase()
+        return v2ToolRoleModels.any { lower.contains(it) }
+    }
 
     // gemma4系は生 OpenAI 形式＋v3プロファイルで運用する（FLM v0.9.45 のツールターン2バグ対策）。
     // 受信側: 捏造断片 strip＋max_tokens キャップ（v3要件④）、送信側: 分割 echo（同②・バグB対策）。
