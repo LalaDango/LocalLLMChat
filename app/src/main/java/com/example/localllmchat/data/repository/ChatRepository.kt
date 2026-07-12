@@ -56,6 +56,11 @@ class ChatRepository(
         // ツール実行ループの上限（1ユーザー発言あたり）。超過分の tool_calls はテキスト扱いで打ち切り
         private const val MAX_TOOL_ROUNDS = 3
 
+        // v3プロファイル（gemma4系）のツールターン max_tokens 保険。生成が <|tool_call> 終端で
+        // 止まらず架空の tool_response〜次問まで書き続ける暴走の被害をトークン面で有界にする。
+        // 窮屈なら調整可（切られた応答は finish_reason=length で検知できる）
+        private const val V3_TOOL_TURN_MAX_TOKENS = 2048
+
         // 小型モデル（gemma4-it:e4b等）はツール結果を無視して質問を繰り返すことがあるため、
         // tools送信時のみ system prompt にガイダンスを追記する
         private val TOOL_GUIDANCE_PROMPT = """
@@ -244,6 +249,16 @@ class ChatRepository(
         val api = ApiClient.getChatApi(baseUrl)
 
         val toolsEnabled = toolDefinitions != null
+        val v3ToolProfile = toolsEnabled && toolRegistry.usesV3ToolProfile(modelName)
+        // v3要件④の保険: ツール定義添付時のみ max_tokens をキャップ
+        // （プロンプト外パラメータなので checkpoint 照合には影響しない）
+        val effectiveMaxTokens =
+            if (v3ToolProfile) minOf(maxCompletionTokens, V3_TOOL_TURN_MAX_TOKENS) else maxCompletionTokens
+        // ストリーミング表示用 sanitize: emit は累積バッファ全量なのでチャンク境界でマーカーが
+        // 割れても次 emit で捕捉される。切除ログは DB 保存時のみ（32ms スロットルのスパム防止で quiet）
+        val sanitizeContent: ((String, Boolean) -> String)? = if (v3ToolProfile) {
+            { text, hasToolCalls -> stripFabricatedToolFragments(text, hasToolCalls, quiet = true) }
+        } else null
         val effectiveSystemPrompt = when {
             !toolsEnabled -> systemPrompt
             systemPrompt.isBlank() -> TOOL_GUIDANCE_PROMPT
@@ -256,10 +271,10 @@ class ChatRepository(
             tools = toolDefinitions,
             stream = true,
             temperature = temperature,
-            maxTokens = maxCompletionTokens
+            maxTokens = effectiveMaxTokens
         )
 
-        var result = streamApiCall(api, step1Request, onStreamUpdate)
+        var result = streamApiCall(api, step1Request, onStreamUpdate, sanitizeContent)
 
         // ツール実行ループ: 応答に tool_calls が含まれる限り「保存→実行→再送信」を繰り返す。
         // MAX_TOOL_ROUNDS 超過分の tool_calls は実行せずテキスト扱いで打ち切り（暴走防止）
@@ -285,7 +300,10 @@ class ChatRepository(
                 }
                 val toolCallsJson = gson.toJson(completedToolCalls)
 
-                val assistantContent = buildRawMessage(result)
+                // v3: 捏造断片は DB 保存前に切除（このループ内の result は必ず tool_calls を含む）
+                val assistantContent = buildRawMessage(result).let {
+                    if (v3ToolProfile) stripFabricatedToolFragments(it, hasToolCalls = true) else it
+                }
                 var lastMsgId = addMessage(
                     conversationId = conversationId,
                     role = "assistant",
@@ -330,15 +348,17 @@ class ChatRepository(
                     tools = toolDefinitions,
                     stream = true,
                     temperature = temperature,
-                    maxTokens = maxCompletionTokens
+                    maxTokens = effectiveMaxTokens
                 )
-                result = streamApiCall(api, nextRequest, onStreamUpdate)
+                result = streamApiCall(api, nextRequest, onStreamUpdate, sanitizeContent)
             }
         } finally {
             askTool?.onAskUser = null
         }
 
-        val rawMessage = buildRawMessage(result)
+        val rawMessage = buildRawMessage(result).let {
+            if (v3ToolProfile) stripFabricatedToolFragments(it, hasToolCalls = result.toolCallMap.isNotEmpty()) else it
+        }
         var assistantMessage = cleanupIncompleteThinkTags(rawMessage)
 
         if (result.toolCallMap.isNotEmpty()) {
@@ -390,7 +410,8 @@ class ChatRepository(
     private suspend fun streamApiCall(
         api: ChatApi,
         request: ApiChatRequest,
-        onStreamUpdate: ((content: String, reasoning: String) -> Unit)?
+        onStreamUpdate: ((content: String, reasoning: String) -> Unit)?,
+        sanitizeContent: ((content: String, hasToolCalls: Boolean) -> String)? = null
     ): StreamResult {
         val responseBody = api.chatStreamMultimodal(request = request)
         val contentBuilder = StringBuilder()
@@ -441,7 +462,8 @@ class ChatRepository(
                         if (now - lastEmitTime >= throttleMs) {
                             lastEmitTime = now
                             onStreamUpdate(
-                                contentBuilder.toString(),
+                                sanitizeContent?.invoke(contentBuilder.toString(), toolCallMap.isNotEmpty())
+                                    ?: contentBuilder.toString(),
                                 reasoningBuilder.toString()
                             )
                         }
@@ -453,7 +475,8 @@ class ChatRepository(
             reader.close()
             // Final emit to ensure last chunk is not lost due to throttle
             onStreamUpdate?.invoke(
-                contentBuilder.toString(),
+                sanitizeContent?.invoke(contentBuilder.toString(), toolCallMap.isNotEmpty())
+                    ?: contentBuilder.toString(),
                 reasoningBuilder.toString()
             )
         }
@@ -1009,6 +1032,39 @@ class ChatRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    // 捏造断片 strip（v3要件④・gemma4系×ツール有効ターン限定）:
+    // 生成が <|tool_call> 終端で止まらず、架空の tool_response（"User selected: ..." 等）→自作判定→
+    // 次問まで書き続ける暴走の断片が content デルタに漏れる（FLM v0.9.45 実測）。
+    // 最初のマーカー位置から末尾までを切除する。疑似タグは正規コンテンツに出現しないため無条件、
+    // "response:" は一般語のため同一応答に tool_calls がある場合のみ行頭 JSON 形を対象とする。
+    // マーカー無しの平文捏造は対象外（max_tokens 保険とハーネス[C5]で監視する役割分担）。
+    // DB 保存前の不可逆切除なので、保存経路では切除長＋先頭50字を Log.w に残す（誤爆の事後診断用）
+    private val fabricatedTagRegex =
+        Regex("""<\|tool_response|<\|tool_call|</tool_|<tool_response>""")
+    private val fabricatedResponseLineRegex =
+        Regex("""^response:\s*[{"]""", RegexOption.MULTILINE)
+
+    private fun stripFabricatedToolFragments(
+        text: String,
+        hasToolCalls: Boolean,
+        quiet: Boolean = false
+    ): String {
+        var cutIndex = fabricatedTagRegex.find(text)?.range?.first ?: -1
+        if (hasToolCalls) {
+            val respIndex = fabricatedResponseLineRegex.find(text)?.range?.first ?: -1
+            if (respIndex >= 0 && (cutIndex < 0 || respIndex < cutIndex)) cutIndex = respIndex
+        }
+        if (cutIndex < 0) return text
+        if (!quiet) {
+            val removed = text.substring(cutIndex)
+            Log.w(
+                "ChatRepository",
+                "Fabricated tool fragment stripped: ${removed.length} chars, head='${removed.take(50)}'"
+            )
+        }
+        return text.substring(0, cutIndex).trimEnd()
     }
 
     private fun cleanupIncompleteThinkTags(text: String): String {

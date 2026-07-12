@@ -55,4 +55,10 @@ class ToolRegistry {
     // 送信時に tool→user 変換 + tool_calls のテキスト畳み込みが必要
     fun requiresToolRoleConversion(modelName: String): Boolean =
         modelName.lowercase().contains("gemma4")
+
+    // gemma4系は生 OpenAI 形式＋v3プロファイルで運用する（FLM v0.9.45 のツールターン2バグ対策）。
+    // 受信側: 捏造断片 strip＋max_tokens キャップ（v3要件④）、送信側: 分割 echo（同②・バグB対策）。
+    // 詳細: .claude/skills/local-ai-env-ref/references/known-issues.md「v0.9.45のツールターン応答2バグ」
+    fun usesV3ToolProfile(modelName: String): Boolean =
+        modelName.lowercase().contains("gemma4")
 }
