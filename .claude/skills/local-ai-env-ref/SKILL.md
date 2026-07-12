@@ -24,10 +24,10 @@ description: ユーザーのローカルAI環境（ハードウェア、FastFlow
 
 詳細な制約と根拠は `references/constraints.md` を参照。
 
-## 現在の主軸構成（2026-07-12時点）
+## 現在の主軸構成（2026-07-13時点）
 
 - **推論**: FastFlowLM **v0.9.45**（NPU、port 52625）＋ **gemma4-it:e4b**（ctx-len 32768、--pmode turbo）
-  ※ ツール連携系の検証は v0.9.45 実測（2026-07-11〜12）。それ以外の数値（prefill速度・decode速度・
+  ※ ツール連携系の検証は v0.9.45 実測（2026-07-11〜13）。それ以外の数値（prefill速度・decode速度・
   位置参照等）は v0.9.43 時点の実測で、0.9.45 での再計測は未実施
 - **旧主力 Qwen3.5:4b は退役**（qwen3-it:4b は検索AI Vane 用に現役）
 - LocalLLMChat は Tailscale 経由で FLM（:52625）に**直結**する
@@ -40,7 +40,8 @@ description: ユーザーのローカルAI環境（ハードウェア、FastFlow
 - **references/constraints.md** — ハードウェア・FLMサーバーの詳細制約（数値・検証日付付き）
 - **references/verified-models.md** — 検証済みモデル一覧と実測値、新モデル評価テンプレート
 - **references/known-issues.md** — 既知の問題・ワークアラウンド（キャッシュミス要因、e4bの挙動特性、
-  gemma4ツール連携: v0.9.45の2バグとv3要件・v2変換レシピ（退役方向）・キャッシュ税の訂正・崩壊頻度・地雷リスト）
+  gemma4ツール連携: v0.9.45の2バグとv3要件（実装済み）・v2変換レシピ（フォールバック残置）・
+  野生捏造シグネチャとstrip・キャッシュ税の訂正・崩壊頻度・地雷リスト）
 
 各リファレンスは必要に応じて読み込むこと。
 判定に迷う場合は `constraints.md` と `verified-models.md` の両方を確認せよ。
@@ -50,7 +51,7 @@ description: ユーザーのローカルAI環境（ハードウェア、FastFlow
 | 旧 | 現在 |
 |---|---|
 | ツール会話は毎ターン全量prefillの宿命（2026-07-07記録） | **誤り**（2026-07-12訂正）。生形式は部分ヒット成立・v2変換の税は「ツールラウンドごとに1回」（known-issues.md参照） |
-| gemma4はrole:"tool"がモデルに届かない → v2変換で対処（2026-07-07） | **v0.9.45で素形式読解5/5**＝v2の存在理由消滅。生形式ベース「v3」へ移行方向（実装は未着手・2026-07-12） |
+| gemma4はrole:"tool"がモデルに届かない → v2変換で対処（2026-07-07） | **v0.9.45で素形式読解5/5**＝v2の存在理由消滅。生形式ベース「**v3へ移行済み**」（2026-07-13・v2はフォールバック残置） |
 | 主力モデル: Qwen3.5:4b（ctx 32768） | **gemma4-it:e4b**（MatFormer、ctx-len 32768） |
 | 9Bはprefill 1回1,792tokで即死／4Bも~8Ktok上限 | **撤廃**。FLM v0.9.43のchunk prefill（--prefill-chunk-len 既定4096）で長文は自動分割 |
 | FastFlowLM v0.9.39以前 | **v0.9.45**（以下の機能検証はv0.9.43時点）。stream:falseでもキャッシュ有効、KV実測フィールドあり。reasoning_effort は v0.9.39〜（**qwen3/qwen3.5系限定**、none/low/medium/high。Gemma系は無視）。Gemma 4 の thinking は別方式（**プロンプト（質問）冒頭**の `<\|think\|>` トークンでON/OFF、段階指定なし。質問冒頭に付けるだけで発火することを実機確認 2026-07-06） |
@@ -59,6 +60,12 @@ description: ユーザーのローカルAI環境（ハードウェア、FastFlow
 
 ## 更新履歴
 
+- 2026-07-13: gemma4ツール連携の**v3実装・検証グリーン**を反映（ソースはknown-issues.md 07-13版）。
+  ①v3（生形式＋分割echo＋孤児/宙ぶらりんガード＋捏造断片strip＋max_tokens 2048キャップ）が
+  LocalLLMChatの現行実装に・v2はフォールバック残置 ②ハーネスv1.2/実機とも全項目グリーン、
+  残タスク「生形式エラー系」回収（C5実質10/10 REPORT・RETRY 0）③strip実戦2勝
+  （実物3シグネチャ: response:ツール名{ / <|"|> / <tool_call|>。ユニットテスト固定）
+  ④捏造tool_callはFLMが本物としてパースし実行系に流れる（stripは本文断片のみ担当）
 - 2026-07-12: フル版還流ノート（docs/gemma4-tool-inflow-note-2026-07-12.md、ソースはフル版
   tool-mode-collapse.md / known-issues.md 2026-07-12版）から選別還流。①FLM v0.9.45で
   role:"tool"素形式が読解可能に→v2変換は退役方向・v3要件5点（stream受信・分割echo・孤児tool禁止・
