@@ -24,9 +24,11 @@ description: ユーザーのローカルAI環境（ハードウェア、FastFlow
 
 詳細な制約と根拠は `references/constraints.md` を参照。
 
-## 現在の主軸構成（2026-07-05時点）
+## 現在の主軸構成（2026-07-12時点）
 
-- **推論**: FastFlowLM v0.9.43（NPU、port 52625）＋ **gemma4-it:e4b**（ctx-len 32768、--pmode turbo）
+- **推論**: FastFlowLM **v0.9.45**（NPU、port 52625）＋ **gemma4-it:e4b**（ctx-len 32768、--pmode turbo）
+  ※ ツール連携系の検証は v0.9.45 実測（2026-07-11〜12）。それ以外の数値（prefill速度・decode速度・
+  位置参照等）は v0.9.43 時点の実測で、0.9.45 での再計測は未実施
 - **旧主力 Qwen3.5:4b は退役**（qwen3-it:4b は検索AI Vane 用に現役）
 - LocalLLMChat は Tailscale 経由で FLM（:52625）に**直結**する
 - ※ PC上には自作の FLM Session Manager（SM、localhost:8800）という別経路のミドルウェアも存在するが、
@@ -37,15 +39,18 @@ description: ユーザーのローカルAI環境（ハードウェア、FastFlow
 
 - **references/constraints.md** — ハードウェア・FLMサーバーの詳細制約（数値・検証日付付き）
 - **references/verified-models.md** — 検証済みモデル一覧と実測値、新モデル評価テンプレート
-- **references/known-issues.md** — 既知の問題・ワークアラウンド（キャッシュミス要因、e4bの挙動特性、gemma4ツール連携の変換レシピ）
+- **references/known-issues.md** — 既知の問題・ワークアラウンド（キャッシュミス要因、e4bの挙動特性、
+  gemma4ツール連携: v0.9.45の2バグとv3要件・v2変換レシピ（退役方向）・キャッシュ税の訂正・崩壊頻度・地雷リスト）
 
 各リファレンスは必要に応じて読み込むこと。
 判定に迷う場合は `constraints.md` と `verified-models.md` の両方を確認せよ。
 
-## 旧知見の無効化（2026-03頃の記憶を読む際の注意）
+## 旧知見の無効化（過去の記憶・メモを読む際の注意）
 
-| 旧（2026-03頃） | 現在（2026-07-05） |
+| 旧 | 現在 |
 |---|---|
+| ツール会話は毎ターン全量prefillの宿命（2026-07-07記録） | **誤り**（2026-07-12訂正）。生形式は部分ヒット成立・v2変換の税は「ツールラウンドごとに1回」（known-issues.md参照） |
+| gemma4はrole:"tool"がモデルに届かない → v2変換で対処（2026-07-07） | **v0.9.45で素形式読解5/5**＝v2の存在理由消滅。生形式ベース「v3」へ移行方向（実装は未着手・2026-07-12） |
 | 主力モデル: Qwen3.5:4b（ctx 32768） | **gemma4-it:e4b**（MatFormer、ctx-len 32768） |
 | 9Bはprefill 1回1,792tokで即死／4Bも~8Ktok上限 | **撤廃**。FLM v0.9.43のchunk prefill（--prefill-chunk-len 既定4096）で長文は自動分割 |
 | FastFlowLM v0.9.39以前 | **v0.9.43**。stream:falseでもキャッシュ有効、KV実測フィールドあり。reasoning_effort は v0.9.39〜（**qwen3/qwen3.5系限定**、none/low/medium/high。Gemma系は無視）。Gemma 4 の thinking は別方式（**プロンプト（質問）冒頭**の `<\|think\|>` トークンでON/OFF、段階指定なし。質問冒頭に付けるだけで発火することを実機確認 2026-07-06） |
@@ -54,9 +59,16 @@ description: ユーザーのローカルAI環境（ハードウェア、FastFlow
 
 ## 更新履歴
 
+- 2026-07-12: フル版還流ノート（docs/gemma4-tool-inflow-note-2026-07-12.md、ソースはフル版
+  tool-mode-collapse.md / known-issues.md 2026-07-12版）から選別還流。①FLM v0.9.45で
+  role:"tool"素形式が読解可能に→v2変換は退役方向・v3要件5点（stream受信・分割echo・孤児tool禁止・
+  捏造断片strip・ツール名焼き込み）②v0.9.45の2バグ（stream:false本文欠落／混在echo再展開破損）
+  ③キャッシュ税の訂正（「毎ターン全量prefill」は誤り→生形式は部分ヒット・v2はラウンドごと1回）
+  ④崩壊は稀な初手事故（q4nx 40/40 REPORT）・prefill完治策は使用不可⑤地雷リスト5項目
+  ⑥e4b評価の訂正（判定スキップ約1/5はバグA由来・モデル無実）
 - 2026-07-07: Claude.ai側スキル2026-07-07版から同期。①gemma4のrole:"tool"無視の真因
   （FLMテンプレートがtoolロールを落とす）とv2変換レシピ（commit c1250af・known-issues.md収録）
-  ②ツール発火は閾値（ツール名明示100%/なし0%）③ツール会話は毎ターン全量prefillの宿命
+  ②ツール発火は閾値（ツール名明示100%/なし0%）③ツール会話は毎ターン全量prefillの宿命（→2026-07-12訂正）
   ④添付文書の位置参照16K/49%で8/8満点・履歴件数カウントとの別現象区別 ⑤添付上限のKiB/KB境界
   ⑥e4b vision確定（画像1枚≒256tok固定・1024px/q85で十分・読解限界12〜14px・幻覚コード注意）
   ⑦thinking制御の訂正（system prompt先頭→プロンプト冒頭）
