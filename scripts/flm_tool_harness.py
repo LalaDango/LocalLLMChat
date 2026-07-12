@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FLM ツール検証ハーネス v1.1 (2026-07-11)
+FLM ツール検証ハーネス v1.2 (2026-07-12)
 LocalLLMChat の buildApiMessages() が送るペイロードを忠実再現し、
 gemma4-it:e4b のツール挙動を自動測定する。
 
+v1.2: アプリの生形式 v3 移行（分割echo・stream受信・孤児tool禁止）に同期。
+  - [B] に生形式アーム追加（quiz-生形式v3 / datetime-生形式v3）。v2 アームは対照として残置
+    （アプリ側の v2 フォールバックコード残置と対）
+  - [C] に C5-生形式素 を追加（known-issues 残タスク「生形式エラー系の挙動確認」の回収）
+  - 生形式アームは force_stream=True で SSE 受信を強制（FLM v0.9.45 バグA:
+    stream:false だと tool_call 含み応答の assistant 本文が API から欠落 → 判定を取りこぼす）。
+    v2 アームは従来どおり stream:false（過去計測との比較可能性を維持）。
+    ⚠ v2 アームで tool_call 混在応答時に判定文が空になる GRAY はバグA由来＝正常（回帰ではない）
+  - 判定は未 strip の生 content で行う（アプリの捏造断片 strip は UX ガードであり、
+    ハーネスの目的はモデル+FLM 挙動の計測なので隠さない）
+
 測定項目:
   [A] 発火率テスト: Step1 でツールを呼ぶか (PASS = finish_reason == "tool_calls")
-  [B] 結果追従テスト: gemma4 変換済み履歴を注入し、ツール結果を踏まえた応答を返すか
+  [B] 結果追従テスト: ツール結果込み履歴（v2変換 or 生形式v3）を注入し、
+      結果を踏まえた応答を返すか
   [C] 崩壊頻度テスト (v1.1 新設): ツールエラー結果に対する応答モードを分類する。
       背景は tool-mode-collapse.md (2026-07-11版)。fp16 実測「30/30 崩壊なし」が
       FLM 配布版 q4nx に移るかは未観測 = 本テストの目的。
@@ -16,6 +28,8 @@ gemma4-it:e4b のツール挙動を自動測定する。
         C2-nudge     : 末尾指示を「謝罪して報告せよ」に差し替え (対策(b): 指示注入)
         C3-擬似pf-ja : 末尾に完了済み assistant「申し訳ありませんが、」を追加
         C4-擬似pf-en : 同上の英語版「I'm sorry, 」
+        C5-生形式素  : v3 生形式のエラー注入 (v1.2 新設。アプリ v3 は tool 結果の後に
+                       指示文を足さないため「素」のみ。nudge スロットは v2 専用の書式)
       ※ FLM v0.9.45 は assistant prefill 非対応 (サイレント無視・完了ターン扱い) のため、
         C3/C4 は prefill ではなく「完了済み assistant ターンによる文体アンカー」の検証。
         assistant 連続シーケンスの挙動自体も未検証 → それ込みで測定対象
@@ -161,6 +175,21 @@ def tool_result_user_msg_custom(entries, instruction):
     return {"role": "user", "content": normalize("\n".join(lines) + "\n" + instruction)}
 
 
+def raw_tool_round(name, args, result, call_id="call_001"):
+    """生形式 v3: assistant(tool_calls-only・content:null) + tool 結果の親子ペアを構築。
+    アプリ v3 の echo 形 (ChatRepository.buildApiMessages) および
+    probe_raw_tool_role.py の RAW_ASSISTANT_TOOL_CALL / RAW_TOOL_RESULT と同形。
+    args は verbatim (アプリも toolCallsJson の arguments を無加工で再送する)。
+    tool content はアプリ同様 normalize を通す"""
+    return [
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": call_id, "type": "function",
+             "function": {"name": name, "arguments": args}},
+        ]},
+        {"role": "tool", "tool_call_id": call_id, "content": normalize(result)},
+    ]
+
+
 def build_messages(user_prompt=None, history=None):
     msgs = [{"role": "system", "content": normalize(TOOL_GUIDANCE_PROMPT)}]
     if history:
@@ -263,6 +292,28 @@ FOLLOW_CASES = {
         "pass_keywords": ["21:30", "21時30分", "9時30分", "午後9時30分"],
         "fail_if_contains": [],
     },
+    # ---- v1.2: 生形式 v3 アーム (アプリの現行ペイロード) ----
+    # force_stream 必須: stream:false だと応答に tool_call が混在した場合バグAで本文欠落
+    # → 判定文を取りこぼす。Step1 の canned assistant は本文なし tool_call のみ
+    # (probe_raw_quiz.py の canned_step1_history と同形 = 分割不要の tool_calls-only echo)
+    "quiz-生形式v3": {
+        "force_stream": True,
+        "history": [
+            {"role": "user", "content": normalize("Please create a quiz about attention mechanisms using the ask_user_question tool.")},
+            *raw_tool_round("ask_user_question", QUIZ_ARGS, RESULT_ASK, call_id="call_quiz_1"),
+        ],
+        "pass_keywords": ["正解", "正しい", "その通り", "はい", "Multi-Head"],
+        "fail_if_contains": [QUIZ_QUESTION_CORE],
+    },
+    "datetime-生形式v3": {
+        "force_stream": True,
+        "history": [
+            {"role": "user", "content": "今何時？"},
+            *raw_tool_round("get_datetime", DT_ARGS, RESULT_DT, call_id="call_dt_1"),
+        ],
+        "pass_keywords": ["21:30", "21時30分", "9時30分", "午後9時30分"],
+        "fail_if_contains": [],
+    },
 }
 
 
@@ -305,6 +356,16 @@ COLLAPSE_ARMS = {
             {"role": "user", "content": "今何時？"},
             tool_result_user_msg_custom(_ERR_ENTRY, STD_INSTRUCTION),
             {"role": "assistant", "content": "I'm sorry, "},
+        ],
+    },
+    # v1.2: 生形式 v3 のエラー系 (known-issues 残タスクの回収)。アプリ v3 は tool 結果の後に
+    # 指示文を足さないので「素」のみ。RETRY は生形式で出やすい想定 (tool_call 構文が履歴に
+    # 残るため再呼び出しをプライムする可能性・憶測 n=1) → 崩壊にはカウントせず観察対象
+    "C5-生形式素": {
+        "force_stream": True,
+        "history": [
+            {"role": "user", "content": "今何時？"},
+            *raw_tool_round("get_datetime", DT_ARGS, RESULT_DT_ERROR, call_id="call_err_1"),
         ],
     },
 }
@@ -388,13 +449,15 @@ def run(only=None, n_trials=N_TRIALS, use_stream=False):
         print(f"\n=== [B] 結果追従テスト (各 {n_trials} 回) ===")
         for label, case in FOLLOW_CASES.items():
             counts = {"PASS": 0, "FAIL": 0, "GRAY": 0}
+            # 生形式アームは stream 強制 (バグA対策)。v2 アームは従来どおり
+            st = use_stream or case.get("force_stream", False)
             for i in range(n_trials):
-                res = call_flm(build_messages(history=case["history"]), use_stream=use_stream)
+                res = call_flm(build_messages(history=case["history"]), use_stream=st)
                 verdict = judge_follow(case, res)
                 counts[verdict] += 1
                 head = res["content"][:60].replace("\n", " ")
                 print(f"  {label} #{i+1}: {verdict} 「{head}…」")
-                log({"test": "follow", "cond": label, "trial": i + 1, "verdict": verdict, **res})
+                log({"test": "follow", "cond": label, "trial": i + 1, "verdict": verdict, "stream": st, **res})
             summary.append(("結果追従", label, f"PASS {counts['PASS']} / FAIL {counts['FAIL']} / GRAY {counts['GRAY']}"))
             print(f"  → {label}: {counts}")
 
@@ -402,15 +465,17 @@ def run(only=None, n_trials=N_TRIALS, use_stream=False):
         print(f"\n=== [C] 崩壊頻度テスト (各 {n_trials} 回, max_tokens={COLLAPSE_MAX_TOKENS}) ===")
         for label, arm in COLLAPSE_ARMS.items():
             counts = {"REPORT": 0, "RETRY": 0, "FICTION": 0, "FABRICATION": 0, "GRAY": 0}
+            # 生形式アームは stream 強制 (バグA対策)。v2 アームは従来どおり
+            st = use_stream or arm.get("force_stream", False)
             for i in range(n_trials):
                 res = call_flm(build_messages(history=arm["history"]),
                                overrides={"max_tokens": COLLAPSE_MAX_TOKENS},
-                               use_stream=use_stream)
+                               use_stream=st)
                 verdict = judge_collapse(res)
                 counts[verdict] += 1
                 head = res["content"][:60].replace("\n", " ")
                 print(f"  {label} #{i+1}: {verdict} finish={res['finish_reason']} 「{head}…」")
-                log({"test": "collapse", "cond": label, "trial": i + 1, "verdict": verdict, **res})
+                log({"test": "collapse", "cond": label, "trial": i + 1, "verdict": verdict, "stream": st, **res})
             result_str = " / ".join(f"{k} {v}" for k, v in counts.items() if v) or "(結果なし)"
             summary.append(("崩壊頻度", label, result_str))
             print(f"  → {label}: {counts}")

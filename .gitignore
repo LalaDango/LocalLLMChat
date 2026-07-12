@@ -30,4 +30,8 @@ docs/
 
 # FLM tool harness raw logs (scripts/flm_tool_harness.py)
 results_*.jsonl
+# FLM probe raw logs (scripts/probe_*.py)
+raw_tool_role_results_*.jsonl
+tool_cache_results_*.jsonl
+raw_quiz_results_*.jsonl
 __pycache__/
