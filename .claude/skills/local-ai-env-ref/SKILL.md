@@ -53,7 +53,7 @@ description: ユーザーのローカルAI環境（ハードウェア、FastFlow
 | gemma4はrole:"tool"がモデルに届かない → v2変換で対処（2026-07-07） | **v0.9.45で素形式読解5/5**＝v2の存在理由消滅。生形式ベース「v3」へ移行方向（実装は未着手・2026-07-12） |
 | 主力モデル: Qwen3.5:4b（ctx 32768） | **gemma4-it:e4b**（MatFormer、ctx-len 32768） |
 | 9Bはprefill 1回1,792tokで即死／4Bも~8Ktok上限 | **撤廃**。FLM v0.9.43のchunk prefill（--prefill-chunk-len 既定4096）で長文は自動分割 |
-| FastFlowLM v0.9.39以前 | **v0.9.43**。stream:falseでもキャッシュ有効、KV実測フィールドあり。reasoning_effort は v0.9.39〜（**qwen3/qwen3.5系限定**、none/low/medium/high。Gemma系は無視）。Gemma 4 の thinking は別方式（**プロンプト（質問）冒頭**の `<\|think\|>` トークンでON/OFF、段階指定なし。質問冒頭に付けるだけで発火することを実機確認 2026-07-06） |
+| FastFlowLM v0.9.39以前 | **v0.9.45**（以下の機能検証はv0.9.43時点）。stream:falseでもキャッシュ有効、KV実測フィールドあり。reasoning_effort は v0.9.39〜（**qwen3/qwen3.5系限定**、none/low/medium/high。Gemma系は無視）。Gemma 4 の thinking は別方式（**プロンプト（質問）冒頭**の `<\|think\|>` トークンでON/OFF、段階指定なし。質問冒頭に付けるだけで発火することを実機確認 2026-07-06） |
 | checkpoint挙動は未整理 | e4b=**生成後checkpoint保持型**（次ターンは新規userトークンのみprefill）／9B=非保持型 |
 | モバイル: Gemini Nano V3のみ | NanoChat（別アプリ）はNano 4対応済み。LocalLLMChatには影響なし |
 
