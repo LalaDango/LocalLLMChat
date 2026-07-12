@@ -376,6 +376,9 @@ REPORT_KWS = [
     "申し訳", "すみません", "ごめん", "sorry", "Sorry",
     "エラー", "取得できません", "利用できません", "unavailable",
     "できませんでした", "失敗", "しばらく", "再試行", "もう一度",
+    # 2026-07-12 C5実測: 英語の謝罪報告 "I apologize, ... unable to get the exact time"
+    # が GRAY に落ちた（語彙漏れ・モデルは無実）→ 英語謝罪形を追加
+    "apologize", "unable to",
 ]
 FICTION_MARKERS = [
     "<|tool", "</tool", "<tool_",          # タグ残渣・タグループ
