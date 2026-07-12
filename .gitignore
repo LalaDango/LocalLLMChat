@@ -28,6 +28,9 @@ local.properties
 nul
 docs/
 
+# FLM serve console logs (verification runs)
+flm_serve*.log
+
 # FLM tool harness raw logs (scripts/flm_tool_harness.py)
 results_*.jsonl
 # FLM probe raw logs (scripts/probe_*.py)
