@@ -1122,10 +1122,13 @@ class ChatRepository(
     // "response:" は一般語のため同一応答に tool_calls がある場合のみ行頭 JSON 形を対象とする。
     // マーカー無しの平文捏造は対象外（max_tokens 保険とハーネス[C5]で監視する役割分担）。
     // DB 保存前の不可逆切除なので、保存経路では切除長＋先頭50字を Log.w に残す（誤爆の事後診断用）
+    // <|" は疑似クオートトークン <|"|> の先頭（2026-07-12 ハーネス[B]で実測した漏れ断片に含まれる）
     private val fabricatedTagRegex =
-        Regex("""<\|tool_response|<\|tool_call|</tool_|<tool_response>""")
+        Regex("""<\|tool_response|<\|tool_call|<\|"|</tool_|<tool_response>""")
+    // 実測シグネチャは `response:ask_user_question{...}` 形（response: の直後にツール名が来る）。
+    // JSON 直開きの `response:{` / `response:"` 形も併せて対象にする
     private val fabricatedResponseLineRegex =
-        Regex("""^response:\s*[{"]""", RegexOption.MULTILINE)
+        Regex("""^response:\s*(?:[{"]|\w+\s*\{)""", RegexOption.MULTILINE)
 
     private fun stripFabricatedToolFragments(
         text: String,
