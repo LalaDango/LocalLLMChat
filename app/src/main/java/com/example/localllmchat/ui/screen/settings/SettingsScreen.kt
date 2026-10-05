@@ -48,6 +48,7 @@ private val PRESET_MODELS = listOf(
     "gemma3:4b",
     "gemma4-it:e2b",
     "gemma4-it:e4b",
+    "gemma4-it:12b",
     "lfm2.5-it:1.2b",
     "lfm2.5-tk:1.2b",
     "qwen3.5:0.8b",
