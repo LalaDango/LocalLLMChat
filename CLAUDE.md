@@ -3,7 +3,7 @@
 ## プロジェクト概要
 Kotlin / Jetpack Compose の Android チャットアプリ。PC の NPU 上で動作する FastFlowLM（OpenAI 互換 API）と Tailscale 経由で SSE ストリーミング通信し、ローカル LLM とリアルタイムに会話できる。
 
-サーバー側環境（FastFlowLM v0.9.45 / 主力モデル gemma4-it:e4b / NPU 7.6GB 制約 / KV キャッシュ挙動）の詳細は `.claude/skills/local-ai-env-ref/` を参照。環境判定はメモリの旧記述よりこのスキルを優先すること。
+サーバー側環境（FastFlowLM 実機 v1.0.7 / 主力モデル gemma4-it:e4b・大型枠 gemma4-it:12b / NPU 上限 9.1GB（60% 設定）・Windows AI の NPU 割り込み / KV キャッシュ挙動）の詳細は `.claude/skills/local-ai-env-ref/` を参照。環境判定はメモリの旧記述よりこのスキルを優先すること。
 
 このスキルは **LocalLLMChat 特化のスリム版**で、Claude.ai 側のフル版 .skill（SM 含む環境全体の正本）とは**別ディストリビューション**。ファイル一致は目指さない。新知見が出たら双方向に「内容」を選別して還流する（ファイル丸ごとコピーで上書きしない。フル版由来の SM/Vane/モバイル文脈は取り込まない）。
 
