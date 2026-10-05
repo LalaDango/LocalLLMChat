@@ -17,5 +17,13 @@ data class UsageResponse(
     @SerializedName("active_kv_tokens")
     val activeKvTokens: Int? = null,
     @SerializedName("max_kv_token_capacity")
-    val maxKvTokenCapacity: Int? = null
+    val maxKvTokenCapacity: Int? = null,
+    // FastFlowLM v1.0.x: prompt_tokens は全量、checkpoint から復元した分は cached_tokens で報告
+    @SerializedName("prompt_tokens_details")
+    val promptTokensDetails: PromptTokensDetails? = null
+)
+
+data class PromptTokensDetails(
+    @SerializedName("cached_tokens")
+    val cachedTokens: Int? = null
 )

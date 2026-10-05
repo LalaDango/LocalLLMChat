@@ -10,6 +10,7 @@ import com.example.localllmchat.data.model.SummarizeConfig
 import com.example.localllmchat.data.repository.ChatRepository
 import com.example.localllmchat.data.repository.SettingsRepository
 import com.example.localllmchat.util.ProcessedAttachment
+import com.example.localllmchat.util.TokenEstimator
 import com.google.gson.Gson
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +26,9 @@ data class AskUserDialogState(
 
 data class CapacityWarning(
     val projected: Int,
-    val capacity: Int
+    val capacity: Int,
+    // true: この会話の実測値がなく、別の会話で最後に受け取った容量で判定した（サーバー再起動で古い可能性あり）
+    val isFromOtherConversation: Boolean = false
 )
 
 data class ChatUiState(
@@ -40,6 +43,7 @@ data class ChatUiState(
     val maxAttachmentTextKb: Int = SettingsRepository.DEFAULT_MAX_ATTACHMENT_TEXT_KB,
     val maxCompletionTokens: Int = SettingsRepository.DEFAULT_MAX_COMPLETION_TOKENS,
     val measuredKvCapacity: Int? = null, // max_kv_token_capacity from FLM (overrides contextWindowSize when present)
+    val lastKnownKvCapacity: Int? = null, // latest max_kv_token_capacity across all conversations (first-message guard)
     val isFullPrefill: Boolean = false, // last turn was a full prefill (cache miss)
     val capacityWarning: CapacityWarning? = null,
     val textAttachment: ProcessedAttachment.TextAttachment? = null,
@@ -86,7 +90,11 @@ class ChatViewModel(
     private fun loadConversation() {
         viewModelScope.launch {
             val conversation = chatRepository.getConversationById(conversationId)
-            _uiState.value = _uiState.value.copy(conversation = conversation)
+            val lastKnownKvCapacity = chatRepository.getLatestKvCapacity()
+            _uiState.value = _uiState.value.copy(
+                conversation = conversation,
+                lastKnownKvCapacity = lastKnownKvCapacity
+            )
         }
     }
 
@@ -162,16 +170,20 @@ class ChatViewModel(
         if (latestKvMessage != null) {
             val activeKv = latestKvMessage.activeKvTokens!!
             val prevKv = kvMessages.getOrNull(kvMessages.size - 2)?.activeKvTokens
-            // Full prefill (cache miss) detection: on a hit prompt_tokens covers only the
-            // newly added tokens, so prompt + completion + prevKv ≈ activeKv. On a miss the
-            // whole history is re-prefilled (prompt_tokens ≈ activeKv - completion), leaving
-            // a surplus of roughly prevKv. Small histories (< 100 tokens) are skipped: a full
-            // prefill there is cheap and the margin is too noisy to judge.
+            // Full prefill (cache miss) detection. Small histories (< 100 tokens) are skipped:
+            // a full prefill there is cheap and the margin is too noisy to judge.
+            // - FLM v1.0.x reports cached_tokens (restored from checkpoint) and an absolute
+            //   prompt_tokens: a miss restores less than half of the previous KV.
+            // - FLM v0.9.x (no cached_tokens): on a hit prompt_tokens covers only the newly
+            //   added tokens, so prompt + completion + prevKv ≈ activeKv. On a miss the whole
+            //   history is re-prefilled, leaving a surplus of roughly prevKv.
             val prompt = latestKvMessage.promptTokens
             val completion = latestKvMessage.completionTokens ?: 0
+            val cached = latestKvMessage.cachedTokens
             val isFullPrefill = prevKv != null && prevKv >= 100 && prompt != null &&
                 latestKvMessage === messages.lastOrNull { it.role == "assistant" } &&
-                (prompt + completion + prevKv - activeKv) >= prevKv * 0.5
+                if (cached != null) cached < prevKv * 0.5
+                else (prompt + completion + prevKv - activeKv) >= prevKv * 0.5
             _uiState.value = _uiState.value.copy(
                 sessionTokenCount = lastTurnTokens,
                 conversationTotalTokens = activeKv,
@@ -247,27 +259,40 @@ class ChatViewModel(
         _uiState.value = _uiState.value.copy(imageAttachments = current)
     }
 
-    fun sendMessage() {
+    /** @param force 容量警告の「それでも送る」から呼ばれたとき true（ガードを通さない） */
+    fun sendMessage(force: Boolean = false) {
         val message = _uiState.value.inputText.trim()
         val textAttachment = _uiState.value.textAttachment
         val imageAttachments = _uiState.value.imageAttachments
         if (message.isEmpty() && textAttachment == null && imageAttachments.isEmpty()) return
 
-        // 容量超過ガード: 実測 KV 容量があるときのみ、予測トークン量が上限に達しそうなら送信を止める
-        // （容量超過の prefill 強行は FLM の checkpoint を全滅させ復旧不能になるため）
+        // 容量超過ガード: KV 容量が分かるときのみ、予測トークン量が上限に達しそうなら送信を止める
+        // （容量超過の prefill 強行は FLM の checkpoint を全滅させ復旧不能になるため）。
+        // この会話に実測値がなければ（新規会話の 1 通目など）、全会話で最後に受け取った容量で代用する
         val state = _uiState.value
-        val capacity = state.measuredKvCapacity
-        if (capacity != null) {
+        val capacity = state.measuredKvCapacity ?: state.lastKnownKvCapacity
+        var maxTokensLimit: Int? = null
+        if (capacity != null && !force) {
             val estimatedInput =
-                ((message.length + (textAttachment?.content?.length ?: 0)) * 0.9).toInt() +
+                TokenEstimator.estimate(message) +
+                    TokenEstimator.estimate(textAttachment?.content ?: "") +
                     imageAttachments.size * IMAGE_TOKENS_ESTIMATE
-            // 応答生成分は設定の max_tokens（ApiChatRequest に渡す値と同じ）で見積る
-            val projected = state.conversationTotalTokens + estimatedInput + state.maxCompletionTokens
-            if (projected >= capacity) {
+            val projectedPrompt = state.conversationTotalTokens + estimatedInput
+            // 応答生成分は設定の max_tokens を丸ごと見込まず、残り容量まで切り詰めて送る。
+            // ブロックするのは最低限の応答枠すら確保できない（≒プロンプトだけで溢れる）ときのみ
+            val remaining = capacity - projectedPrompt - CAPACITY_SAFETY_MARGIN
+            if (remaining < MIN_REPLY_TOKENS) {
                 // 入力・添付はクリアしない（要約・除外で履歴を減らした後に再送できるように残す）
-                _uiState.value = state.copy(capacityWarning = CapacityWarning(projected, capacity))
+                _uiState.value = state.copy(
+                    capacityWarning = CapacityWarning(
+                        projected = projectedPrompt + MIN_REPLY_TOKENS,
+                        capacity = capacity,
+                        isFromOtherConversation = state.measuredKvCapacity == null
+                    )
+                )
                 return
             }
+            if (remaining < state.maxCompletionTokens) maxTokensLimit = remaining
         }
 
         _uiState.value = _uiState.value.copy(
@@ -287,6 +312,7 @@ class ChatViewModel(
                 userMessage = message,
                 textAttachment = textAttachment,
                 imageAttachments = imageAttachments,
+                maxTokensLimit = maxTokensLimit,
                 onStreamUpdate = { content, reasoning ->
                     _uiState.value = _uiState.value.copy(
                         streamingContent = content,
@@ -466,6 +492,12 @@ class ChatViewModel(
 
     fun dismissCapacityWarning() {
         _uiState.value = _uiState.value.copy(capacityWarning = null)
+    }
+
+    // 見積りは安全側（多め）なので誤ブロックがありうる。サーバーの ctx-len を上げた直後は容量も古い
+    fun sendIgnoringCapacityWarning() {
+        _uiState.value = _uiState.value.copy(capacityWarning = null)
+        sendMessage(force = true)
     }
 
     fun answerAskUserQuestion(answer: String) {
@@ -648,6 +680,10 @@ class ChatViewModel(
     companion object {
         // 画像はエンコーダで解像度によらず固定 ~256 トークンに正規化される（P3-1 実測）。2倍マージンで見積る
         private const val IMAGE_TOKENS_ESTIMATE = 512
+
+        // 容量ガード: 見積り誤差の余白と、これを下回るなら送信を止める最低応答枠
+        private const val CAPACITY_SAFETY_MARGIN = 128
+        private const val MIN_REPLY_TOKENS = 256
 
         // 履歴を書き換える操作は FLM checkpoint 照合を外し、次ターンが全量 prefill になるため
         private const val HISTORY_RELOAD_HINT = "※次の応答は履歴の再読み込みで時間がかかることがあります"

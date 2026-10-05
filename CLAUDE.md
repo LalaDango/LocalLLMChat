@@ -40,7 +40,7 @@ Kotlin / Jetpack Compose の Android チャットアプリ。PC の NPU 上で�
 - `buildApiMessages()` は送信時のみ U+3000 → 半角スペース正規化（`normalizeForApi()`。DB・表示は変更しない）
 - 履歴を書き換える操作（除外トグル・要約適用・ブランチ切替・編集/再生成・ツールON/OFF）の次ターンは全量 prefill → Snackbar でヒント表示
 - assistant 履歴の `<think>` 除去 + trim は生成実物とのズレ → thinking を出すモデル（qwen系）では毎ターンキャッシュミス1回分の宿命。qwen 系で「毎ターン遅い」と感じたらこれが原因（e4b では実害なし、対応不要）
-- ツール会話のキャッシュ税（v3 現行・2026-07-13 実機確認）: 純 tool_call ターンは部分ヒット成立（差分 prefill・税なし）、**分割 echo ラウンドと strip 発動ラウンドのみ当該ターン全量 1 回**。v2 フォールバックはラウンドごと 1 回。部分ヒット時の `prompt_tokens` は差分値報告なので絶対値でのミス判定は不可（余剰式を使う）。詳細はスキル known-issues.md「ツール会話のキャッシュ税」
+- ツール会話のキャッシュ税（v3 現行・2026-07-13 実機確認）: 純 tool_call ターンは部分ヒット成立（差分 prefill・税なし）、**分割 echo ラウンドと strip 発動ラウンドのみ当該ターン全量 1 回**。v2 フォールバックはラウンドごと 1 回。部分ヒット時の `prompt_tokens` は v0.9.x では差分値報告なので絶対値でのミス判定は不可（余剰式を使う）。**FLM v1.0.x は `prompt_tokens` が全量・復元分が `prompt_tokens_details.cached_tokens`** → アプリの full prefill 判定は `cachedTokens` があればそれを優先（2026-10-04）。詳細はスキル known-issues.md「ツール会話のキャッシュ税」
 
 ### Tool Calling
 - **tool 呼び出し関連の作業ではスリム版 env-ref（`.claude/skills/local-ai-env-ref/references/known-issues.md` のツール連携節）必読**（v0.9.45 の 2 バグ・v3 要件・キャッシュ税・地雷リストが集約されている）
@@ -63,7 +63,7 @@ Kotlin / Jetpack Compose の Android チャットアプリ。PC の NPU 上で�
 - 履歴構築時: `isSummarized == true` なら `summaryText` を API に送信
 
 ### DB マイグレーション
-- 現在 version 11（4→5 翻訳、5→6 tool calling、6→7 ブランチ、7→8 要約設定、8→9 プリセット、9→10 KV実測値、10→11 画像永続化 message_images）
+- 現在 version 12（4→5 翻訳、5→6 tool calling、6→7 ブランチ、7→8 要約設定、8→9 プリセット、9→10 KV実測値、10→11 画像永続化 message_images、11→12 cachedTokens）
 - 新しいカラム追加時は `AppDatabase.kt` に Migration を追加すること
 
 ### DI

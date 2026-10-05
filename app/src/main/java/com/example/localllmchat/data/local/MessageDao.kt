@@ -16,6 +16,10 @@ interface MessageDao {
     @Insert
     suspend fun insert(message: MessageEntity): Long
 
+    // 全会話を通じて最後に FLM から受け取った KV 容量（新規会話の 1 通目の容量ガード用）
+    @Query("SELECT maxKvTokenCapacity FROM messages WHERE maxKvTokenCapacity IS NOT NULL ORDER BY createdAt DESC LIMIT 1")
+    suspend fun getLatestKvCapacity(): Int?
+
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteByConversationId(conversationId: Long)
 

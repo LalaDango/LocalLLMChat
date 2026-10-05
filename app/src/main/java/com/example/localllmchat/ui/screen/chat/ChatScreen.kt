@@ -183,12 +183,21 @@ fun ChatScreen(
                 Text(
                     "送信するとコンテキスト上限を超える可能性があります" +
                         "（予測 約${warning.projected} / 上限 ${warning.capacity} トークン）。\n" +
-                        "メッセージの要約・除外で履歴を減らしてから送信してください。"
+                        if (warning.isFromOtherConversation) {
+                            "上限は前回サーバーから受け取った値です。サーバーの ctx-len を上げた場合は「それでも送る」で送信できます。"
+                        } else {
+                            "メッセージの要約・除外で履歴を減らしてから送信してください。"
+                        }
                 )
             },
             confirmButton = {
                 TextButton(onClick = { viewModel.dismissCapacityWarning() }) {
                     Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.sendIgnoringCapacityWarning() }) {
+                    Text("それでも送る")
                 }
             }
         )

@@ -31,6 +31,7 @@ data class MessageEntity(
     val prefillSpeedTps: Double? = null,
     val activeKvTokens: Int? = null,
     val maxKvTokenCapacity: Int? = null,
+    val cachedTokens: Int? = null,
     val summaryText: String? = null,
     val isSummarized: Boolean = false,
     val summarizeConfigJson: String? = null,

@@ -76,6 +76,8 @@ class ChatRepository(
         return conversationDao.getAllConversations()
     }
 
+    suspend fun getLatestKvCapacity(): Int? = messageDao.getLatestKvCapacity()
+
     suspend fun getConversationById(id: Long): ConversationEntity? {
         return conversationDao.getConversationById(id)
     }
@@ -135,6 +137,7 @@ class ChatRepository(
         prefillSpeedTps: Double? = null,
         activeKvTokens: Int? = null,
         maxKvTokenCapacity: Int? = null,
+        cachedTokens: Int? = null,
         toolCallsJson: String? = null,
         toolCallId: String? = null
     ): Long {
@@ -151,6 +154,7 @@ class ChatRepository(
             prefillSpeedTps = prefillSpeedTps,
             activeKvTokens = activeKvTokens,
             maxKvTokenCapacity = maxKvTokenCapacity,
+            cachedTokens = cachedTokens,
             toolCallsJson = toolCallsJson,
             toolCallId = toolCallId
         )
@@ -177,6 +181,7 @@ class ChatRepository(
         userMessage: String,
         textAttachment: ProcessedAttachment.TextAttachment? = null,
         imageAttachments: List<ProcessedAttachment.ImageAttachment> = emptyList(),
+        maxTokensLimit: Int? = null,
         onStreamUpdate: ((content: String, reasoning: String) -> Unit)? = null,
         onToolStatus: ((status: String?) -> Unit)? = null,
         onAskUser: ((question: String, options: List<String>) -> CompletableDeferred<String>)? = null
@@ -221,6 +226,7 @@ class ChatRepository(
             generateResponse(
                 conversationId = conversationId,
                 parentMessageId = userMsgId,
+                maxTokensLimit = maxTokensLimit,
                 onStreamUpdate = onStreamUpdate,
                 onToolStatus = onToolStatus,
                 onAskUser = onAskUser
@@ -235,6 +241,7 @@ class ChatRepository(
         conversationId: Long,
         parentMessageId: Long,
         siblingIndex: Int = 0,
+        maxTokensLimit: Int? = null,
         onStreamUpdate: ((content: String, reasoning: String) -> Unit)? = null,
         onToolStatus: ((status: String?) -> Unit)? = null,
         onAskUser: ((question: String, options: List<String>) -> CompletableDeferred<String>)? = null
@@ -245,7 +252,9 @@ class ChatRepository(
         val disabledTools = settingsRepository.disabledTools.first()
         val toolDefinitions = toolRegistry.getDefinitions(modelName, disabledTools)
         val temperature = settingsRepository.temperature.first()
+        // 呼び出し側の容量ガードが残り KV 容量で切り詰めた上限があればそちらを優先
         val maxCompletionTokens = settingsRepository.maxCompletionTokens.first()
+            .let { if (maxTokensLimit != null) minOf(it, maxTokensLimit) else it }
 
         val api = ApiClient.getChatApi(baseUrl)
 
@@ -318,7 +327,8 @@ class ChatRepository(
                     decodingSpeedTps = result.usage?.decodingSpeedTps,
                     prefillSpeedTps = result.usage?.prefillSpeedTps,
                     activeKvTokens = result.usage?.activeKvTokens,
-                    maxKvTokenCapacity = result.usage?.maxKvTokenCapacity
+                    maxKvTokenCapacity = result.usage?.maxKvTokenCapacity,
+                    cachedTokens = result.usage?.promptTokensDetails?.cachedTokens
                 )
 
                 onToolStatus?.invoke("ツール実行中...")
@@ -382,7 +392,8 @@ class ChatRepository(
             decodingSpeedTps = result.usage?.decodingSpeedTps,
             prefillSpeedTps = result.usage?.prefillSpeedTps,
             activeKvTokens = result.usage?.activeKvTokens,
-            maxKvTokenCapacity = result.usage?.maxKvTokenCapacity
+            maxKvTokenCapacity = result.usage?.maxKvTokenCapacity,
+            cachedTokens = result.usage?.promptTokensDetails?.cachedTokens
         )
 
         updateConversationTitleIfNeeded(conversationId)
